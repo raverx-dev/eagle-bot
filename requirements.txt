@@ -1,0 +1,22 @@
+# ==== Application Dependencies ====
+# These are required for the bot to run.
+discord.py
+python-dotenv
+beautifulsoup4
+selenium
+
+# ==== Development & Code Quality Tools ====
+# These are used to test and improve the code.
+
+# Linter for finding errors and style issues.
+flake8
+
+# Code formatter for consistent style.
+black
+
+# Import sorter for clean and organized imports.
+isort
+
+# ==== Testing Framework ====
+# For writing automated tests in the future.
+pytest
