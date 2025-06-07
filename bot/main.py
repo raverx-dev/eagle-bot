@@ -9,14 +9,13 @@ import discord
 from discord.ext import commands
 
 # Import configuration from the new config module
-from bot.config import DISCORD_BOT_TOKEN, ARCADE_ID, log, EAGLE_EMAIL, EAGLE_PASSWORD, \
-    CHROME_DRIVER_PATH, CHROME_USER_DATA_DIR, CHROME_PROFILE_DIR
+from bot.config import DISCORD_BOT_TOKEN, ARCADE_ID, log
 
 # Import the BROWSER instance from the new eagle_browser module
 from bot.eagle_browser import BROWSER
 
-# BeautifulSoup is used in scraper, so it can be removed from main.py
-from bs4 import BeautifulSoup
+# Import scraping functions from the new scraper module
+from bot.scraper import scrape_profile_page, get_vf_from_arcade, scrape_leaderboard
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -27,120 +26,6 @@ USER_LINKS = {
     # Example:
     # 123456789012345678: "95688187",
 }
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Helper: parse raw HTML into BeautifulSoup
-# (This function will be moved to scraper.py later)
-# ──────────────────────────────────────────────────────────────────────────────
-def parse_html(html: str) -> BeautifulSoup:
-    return BeautifulSoup(html, "html.parser")
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Scrape a player’s profile page for Skill, Plays, Packet, Block.
-# (This function will be moved to scraper.py later)
-# ──────────────────────────────────────────────────────────────────────────────
-def scrape_profile_page(sdvx_id: str) -> dict:
-    result = {
-        "skill": "—",
-        "plays": "—",
-        "packet": "—",
-        "block": "—",
-    }
-
-    url = f"https://eagle.ac/game/sdvx/profile/{sdvx_id}"
-    driver = BROWSER.headless_driver
-    driver.get(url)
-    driver.implicitly_wait(5)
-
-    html = driver.page_source
-    soup = parse_html(html)
-
-    sidebar_ul = soup.find("ul", {"class": "list-group"})
-    if not sidebar_ul:
-        return result
-
-    for li in sidebar_ul.find_all("li", class_="list-group-item"):
-        text = li.get_text(separator=" ", strip=True)
-        if text.startswith("Skill Level:"):
-            try:
-                skill_text = text.split("for")[0].replace("Skill Level:", "").strip()
-                result["skill"] = skill_text
-            except:
-                pass
-        elif text.startswith("Plays:"):
-            try:
-                plays_val = text.replace("Plays:", "").strip().replace(",", "")
-                result["plays"] = plays_val
-            except:
-                pass
-        elif text.startswith("Packet:"):
-            try:
-                parts = text.replace("Packet:", "").split("Block:")
-                packet_val = parts[0].strip().split()[0].replace(",", "")
-                block_val = parts[1].strip().split()[0].replace(",", "")
-                result["packet"] = packet_val
-                result["block"] = block_val
-            except:
-                pass
-
-    return result
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Scrape the arcade leaderboard (top 10) from https://eagle.ac/arcade/{arcade_id}.
-# (This function will be moved to scraper.py later)
-# ──────────────────────────────────────────────────────────────────────────────
-def scrape_leaderboard(arcade_id: str) -> list:
-    driver = BROWSER.headless_driver
-    url = f"https://eagle.ac/arcade/{arcade_id}"
-    driver.get(url)
-    driver.implicitly_wait(5)
-
-    html = driver.page_source
-    soup = parse_html(html)
-
-    h3 = soup.find("h3", class_="panel-title", string=lambda t: t and "Arcade Top 10" in t)
-    if not h3:
-        return []
-
-    panel_div = h3.find_parent("div", class_="panel-primary")
-    if not panel_div:
-        return []
-
-    lead_table = panel_div.find("table", {"class": "table"})
-    if not lead_table:
-        return []
-
-    output = []
-    for row in lead_table.select("tbody > tr"):
-        cols = row.find_all("td")
-        if len(cols) < 4:
-            continue
-        rank = cols[0].get_text(strip=True)
-        sdvx_id = cols[1].get_text(strip=True)
-        name = cols[2].get_text(strip=True)
-        vf_val = cols[3].get_text(strip=True)
-        output.append({
-            "rank": rank,
-            "sdvx_id": sdvx_id,
-            "name": name,
-            "vf": vf_val,
-        })
-    return output
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Utility: Look up a single player's VF in the Arcade Top 10 by comparing IDs
-# (This function will be moved to scraper.py later)
-# ──────────────────────────────────────────────────────────────────────────────
-def get_vf_from_arcade(sdvx_id: str) -> str:
-    board = scrape_leaderboard(ARCADE_ID)
-    for entry in board:
-        if entry["sdvx_id"].replace("-", "") == sdvx_id:
-            return entry["vf"]
-    return "—"
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # DISCORD BOT SETUP (prefix commands)
