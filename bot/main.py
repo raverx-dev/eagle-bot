@@ -1,180 +1,279 @@
-# ──────────────────────────────────────────────────────────────────────────────
-# FILE: bot/main.py
-# ──────────────────────────────────────────────────────────────────────────────
-
-import threading
-import datetime
-import asyncio
+import os
+import json
 import logging
+from datetime import datetime
 
 import discord
 from discord.ext import commands
-from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 
-# Import settings from the new config module
 from bot import config
+from bot.scraper.browser import EagleBrowser
+from bot.scraper import parser
 
-# Selenium imports (for both headed OAuth automation & headless scraping)
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  Basic logging setup
-# ──────────────────────────────────────────────────────────────────────────────
+# Set up logging
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    format="%(asctime)s - %(levelname)s - %(message)s",
 )
-log = logging.getLogger("eagle_bot")
+log = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  In‐memory mapping: { discord_user_id (int) : sdvx_id (str) }
-#  This will be moved to a storage manager in a later step.
-# ──────────────────────────────────────────────────────────────────────────────
-USER_LINKS = {
-    # Example:
-    # 123456789012345678: "95688187",
-}
+# Load environment variables
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  A single “headed” Chrome instance for OAuth + an invisible headless one for scraping
-# ──────────────────────────────────────────────────────────────────────────────
-class EagleBrowser:
-    def __init__(self):
-        self.headless_driver = None
+# Ensure the CHROME_USER_DATA_DIR exists
+os.makedirs(config.CHROME_USER_DATA_DIR, exist_ok=True)
 
-    def run_oauth_login(self, sdvx_id: str) -> bool:
-        """
-        Open a *visible* Chrome window to perform the OAuth login flow.
-        """
-        log.info("🔐 Starting OAuth login flow in a visible Chrome window…")
-
-        options = Options()
-        options.add_argument(f"--user-data-dir={config.CHROME_USER_DATA_DIR}")
-        options.add_argument(f"--profile-directory={config.CHROME_PROFILE_DIR}")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-
-        service = Service(executable_path=config.CHROME_DRIVER_PATH)
-        try:
-            driver = webdriver.Chrome(service=service, options=options)
-        except WebDriverException as e:
-            log.error(f"❌ Could not launch Chrome for OAuth login: {e}")
-            return False
-
-        try:
-            target_url = f"https://eagle.ac/game/sdvx/profile/{sdvx_id}"
-            driver.get(target_url)
-
-            wait = WebDriverWait(driver, 15)
-
-            try:
-                email_fld = wait.until(EC.presence_of_element_located((By.NAME, "email")))
-                pass_fld  = driver.find_element(By.NAME, "password")
-                email_fld.clear()
-                email_fld.send_keys(config.EAGLE_EMAIL)
-                pass_fld.clear()
-                pass_fld.send_keys(config.EAGLE_PASSWORD)
-                pass_fld.submit()
-                log.info("✅ Submitted Eagle credentials.")
-            except TimeoutException:
-                log.info("ℹ️  No login form detected; assuming already logged into kailua/eagle.")
-
-            try:
-                authorize_btn = wait.until(EC.element_to_be_clickable(
-                    (By.XPATH, "//button[contains(text(),'Authorize')]")
-                ))
-                authorize_btn.click()
-                log.info("✅ Clicked ‘Authorize’ button.")
-            except TimeoutException:
-                log.info("ℹ️  No ‘Authorize’ button detected; maybe already authorized previously.")
-
-            try:
-                wait.until(EC.title_contains("Sound Voltex"))
-                log.info("✅ OAuth login complete; session cookie for eagle.ac is now stored.")
-            except TimeoutException:
-                log.error("❌ Timeout waiting for redirection back to profile. OAuth may have failed.")
-                driver.quit()
-                return False
-
-            driver.quit()
-            return True
-
-        except Exception as e:
-            log.error(f"❌ Unexpected error during OAuth login flow: {e}")
-            try:
-                driver.quit()
-            except:
-                pass
-            return False
-
-    def init_headless_chrome(self) -> bool:
-        """
-        Launch a headless ChromeDriver instance that reuses the profile directory.
-        """
-        log.info("☁️  Initializing headless ChromeDriver for scraping…")
-        options = Options()
-        options.add_argument("--headless=new")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument(f"--user-data-dir={config.CHROME_USER_DATA_DIR}")
-        options.add_argument(f"--profile-directory={config.CHROME_PROFILE_DIR}")
-
-        service = Service(executable_path=config.CHROME_DRIVER_PATH)
-        try:
-            self.headless_driver = webdriver.Chrome(service=service, options=options)
-            log.info("✅ Headless ChromeDriver initialized successfully.")
-            return True
-        except WebDriverException as e:
-            log.error(f"❌ Failed to initialize headless ChromeDriver: {e}")
-            return False
-
-    def quit_headless(self):
-        if self.headless_driver:
-            try:
-                self.headless_driver.quit()
-            except:
-                pass
-            self.headless_driver = None
-
-
+# Initialize the browser
 BROWSER = EagleBrowser()
 
-def parse_html(html: str) -> BeautifulSoup:
-    return BeautifulSoup(html, "html.parser")
+# --- Global Data Structures (to be refactored later) ---
+USER_LINKS_FILE = "watched_players.json"
+USER_LINKS = {}  # Discord ID (str) -> SDVX ID (str)
 
-def scrape_profile_page(sdvx_id: str) -> dict:
-    # This function will be moved in a later step
-    pass
+# Discord ID (str) -> {'vf': int, 'plays': int, 'timestamp': datetime}
+CHECKIN_STORE = {}
 
-def scrape_leaderboard(arcade_id: str) -> list:
-    # This function will be moved in a later step
-    pass
-
-def get_vf_from_arcade(sdvx_id: str) -> str:
-    # This function will be moved in a later step
-    pass
-
+# --- Bot Setup ---
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True
-bot = commands.Bot(command_prefix="/", intents=intents)
+intents.members = True  # Required for member-related events
+
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 
 @bot.event
 async def on_ready():
-    log.info(f"Bot is online as {bot.user} (ID {bot.user.id})")
+    """Bot status and initial setup upon connection."""
+    log.info(
+        f"Bot is online as {bot.user.name}#{bot.user.discriminator}"
+    )
+    log.info(f"Discord.py version: {discord.__version__}")
+    await bot.change_presence(activity=discord.Game(name="SDVX"))
 
-# All bot commands will be moved to Cogs in later steps.
-# For this cycle, we are only testing if the bot runs with the new config.
+    # Initial login for cookie persistence
+    if not BROWSER.init_headless_chrome():
+        log.error(
+            "Failed to initialize headless browser. "
+            "Commands may not work."
+        )
+    else:
+        log.info(
+            "Headless browser successfully initialized for scraping."
+        )
 
-if __name__ == "__main__":
-    bot.run(config.DISCORD_TOKEN)
+    # Load user links
+    load_user_links()
+    log.info(f"Loaded user links: {USER_LINKS}")
+
+
+# --- User Link Management ---
+def load_user_links():
+    """Loads Discord-SDVX ID links from the JSON file."""
+    if os.path.exists(USER_LINKS_FILE):
+        try:
+            with open(USER_LINKS_FILE, "r") as f:
+                USER_LINKS.update(json.load(f))
+        except json.JSONDecodeError as e:
+            log.error(f"Error loading {USER_LINKS_FILE}: {e}")
+            USER_LINKS.clear()
+    else:
+        log.info(
+            f"{USER_LINKS_FILE} not found. Starting with empty links."
+        )
+        with open(USER_LINKS_FILE, "w") as f:
+            json.dump({}, f)
+
+
+def save_user_links():
+    """Saves Discord-SDVX ID links to the JSON file."""
+    try:
+        with open(USER_LINKS_FILE, "w") as f:
+            json.dump(USER_LINKS, f, indent=4)
+    except IOError as e:
+        log.error(f"Error saving {USER_LINKS_FILE}: {e}")
+
+
+# --- Discord Commands ---
+@bot.command(
+    name="linkid",
+    help="Links your Discord account to an SDVX ID (Admin Only).",
+)
+@commands.has_permissions(administrator=True)
+async def linkid(ctx, sdvx_id: str):
+    """
+    Links a user's Discord account to their SDVX ID.
+    Usage: !linkid <SDVX_ID>
+    """
+    discord_id = str(ctx.author.id)
+    sdvx_id_clean = sdvx_id.replace("-", "")
+
+    if not sdvx_id_clean.isdigit():
+        await ctx.send(
+            "Error: SDVX ID must be numeric, even with hyphens."
+        )
+        return
+
+    # Try to perform OAuth login using the provided ID.
+    if not BROWSER.run_oauth_login(sdvx_id_clean):
+        await ctx.send(
+            "Failed to perform OAuth login with the provided SDVX ID. "
+            "Please ensure it's correct."
+        )
+        return
+
+    USER_LINKS[discord_id] = sdvx_id_clean
+    save_user_links()
+    await ctx.send(
+        f"Successfully linked Discord user "
+        f"`{ctx.author.display_name}` to SDVX ID "
+        f"`{sdvx_id_clean}`. OAuth login completed and cookie saved."
+    )
+    log.info(f"Linked {ctx.author.id} to {sdvx_id_clean}")
+
+
+@linkid.error
+async def linkid_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(
+            "Usage: `!linkid <SDVX_ID>`. Please provide an SDVX ID."
+        )
+    elif isinstance(error, commands.MissingPermissions):
+        await ctx.send("You don't have permission to use this command.")
+    else:
+        log.error(f"Error in linkid command: {error}")
+        await ctx.send(f"An unexpected error occurred: {error}")
+
+
+@bot.command(
+    name="stats",
+    help="Displays your current SDVX stats.",
+)
+async def stats(ctx):
+    """
+    Displays the linked user's current Volforce (VF), Skill Level,
+    total play count, and last 5 plays.
+    """
+    discord_id = str(ctx.author.id)
+    sdvx_id = USER_LINKS.get(discord_id)
+
+    if not sdvx_id:
+        await ctx.send(
+            "Your Discord account is not linked to an SDVX ID. "
+            "Please use `!linkid <SDVX_ID>`."
+        )
+        return
+
+    await ctx.send(f"Fetching stats for SDVX ID `{sdvx_id}`...")
+
+    current_vf = parser.get_vf_from_arcade(
+        BROWSER.headless_driver, sdvx_id
+    )
+    profile_data = parser.scrape_profile_page(
+        BROWSER.headless_driver, sdvx_id
+    )
+    if not profile_data:
+        await ctx.send(
+            "Could not retrieve profile data. The website might "
+            "be down or your ID is incorrect."
+        )
+        return
+
+    skill_level = profile_data.get("skill_level", "N/A")
+    total_plays = profile_data.get("total_plays", "N/A")
+    last_5_plays = profile_data.get("last_5_plays", [])
+
+    # Format last 5 plays
+    formatted_plays = []
+    for play in last_5_plays:
+        title = play.get("title", "Unknown Title")
+        difficulty = play.get("difficulty", "N/A")
+        level = play.get("level", "N/A")
+        score = play.get("score", "N/A")
+        time_ago = play.get("time_ago", "N/A")
+        formatted_plays.append(
+            f"• {title} {difficulty} {level} PLAYED {score} ({time_ago})"
+        )
+
+    response = (
+        "**__Your SDVX Stats:__**\n"
+        f"**Volforce:** `{current_vf}`\n"
+        f"**Skill Level:** `{skill_level}`\n"
+        f"**Total Plays:** `{total_plays}`\n"
+        "**Last 5 Plays:**\n" +
+        ("\n".join(formatted_plays) if formatted_plays else
+         "  No recent plays found.")
+    )
+    await ctx.send(response)
+
+
+@bot.command(
+    name="leaderboard",
+    help="Displays the top 10 players on the arcade leaderboard.",
+)
+async def leaderboard(ctx):
+    """
+    Displays the top-10 ranked players from the arcade's VF leaderboard,
+    showing rank, name, and VF.
+    """
+    await ctx.send("Fetching leaderboard data. This might take a moment...")
+
+    leaderboard_data = parser.scrape_leaderboard(
+        BROWSER.headless_driver
+    )
+    if not leaderboard_data:
+        await ctx.send(
+            "Could not retrieve leaderboard data. "
+            "The website might be down."
+        )
+        return
+
+    response = "**__Arcade Top 10 Volforce Leaderboard:__**\n"
+    for player in leaderboard_data:
+        response += (
+            f"**Rank {player['rank']}**: {player['name']} — "
+            f"`{player['vf']} VF`\n"
+        )
+    await ctx.send(response)
+
+
+@bot.command(
+    name="checkin",
+    help="Records your current VF and play count for a session.",
+)
+async def checkin(ctx):
+    """
+    Records a user's current VF and play count as the start
+    of a session.
+    """
+    discord_id = str(ctx.author.id)
+    sdvx_id = USER_LINKS.get(discord_id)
+
+    if not sdvx_id:
+        await ctx.send(
+            "Your Discord account is not linked to an SDVX ID. "
+            "Please use `!linkid <SDVX_ID>`."
+        )
+        return
+
+    current_vf = parser.get_vf_from_arcade(
+        BROWSER.headless_driver, sdvx_id
+    )
+    profile_data = parser.scrape_profile_page(
+        BROWSER.headless_driver, sdvx_id
+    )
+    current_plays = profile_data.get("total_plays", 0)
+
+    CHECKIN_STORE[discord_id] = {
+        "vf": current_vf,
+        "plays": current_plays,
+        "timestamp": datetime.now(),
+    }
+    await ctx.send(
+        f"Checked in! Your current VF is `{current_vf}` and plays are "
+        f"`{current_plays}`. Use `!checkout` to see session stats."
+    )
+    log.info(
+        f"User {discord_id} checked in with VF {current_vf} and "
+        f"plays {current_plays}."
+    )
