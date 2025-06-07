@@ -21,7 +21,7 @@ ARCADE_ID = os.getenv("ARCADE_ID", "1")  # Default to '1' if not set
 # --- Selenium and Chrome Driver Settings ---
 # Ensure CHROME_DRIVER_PATH is correctly set to your chromedriver executable
 CHROME_DRIVER_PATH = os.getenv("CHROME_DRIVER_PATH",
-                               "/usr/local/bin/chromedriver")
+                               "/usr/bin/chromedriver")
 
 # Define paths for Chrome user data and profile to persist cookies
 # These directories will be created if they don't exist

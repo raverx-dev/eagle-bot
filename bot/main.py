@@ -1,4 +1,5 @@
 import os
+import asyncio
 import logging
 from datetime import datetime
 
@@ -28,15 +29,16 @@ os.makedirs(config.CHROME_USER_DATA_DIR, exist_ok=True)
 BROWSER = EagleBrowser()
 
 # --- Global Data Structures (to be refactored later) ---
-# CHECKIN_STORE maps Discord ID (str) to dict with 'vf', 'plays', 'timestamp'
+# CHECKIN_STORE maps Discord ID (str) to {'vf': int, 'plays': int, 'timestamp': datetime}
 CHECKIN_STORE = {}
+USER_LINKS = {}
 
 # --- Bot Setup ---
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True  # Required for member-related events, if any
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="/", intents=intents)
 
 
 @bot.event
@@ -48,19 +50,12 @@ async def on_ready():
     log.info(f"Discord.py version: {discord.__version__}")
     await bot.change_presence(activity=discord.Game(name="SDVX"))
 
-    # Initial login for cookie persistence
-    if not BROWSER.init_headless_chrome():
-        log.error(
-            "Failed to initialize headless browser. Commands may not work."
-        )
-    else:
-        log.info(
-            "Headless browser successfully initialized for scraping."
-        )
-
     # Load user links
-    user_manager.USER_LINKS.update(user_manager.load_users())
-    log.info(f"Loaded user links: {user_manager.USER_LINKS}")
+    global USER_LINKS
+    USER_LINKS = user_manager.load_users()
+    log.info(f"Loaded user links: {USER_LINKS}")
+
+    # Note: headless Chrome will be initialized when needed after OAuth
 
 
 # --- Discord Commands ---
@@ -72,10 +67,10 @@ async def on_ready():
 async def linkid(ctx, sdvx_id: str):
     """
     Links a user's Discord account to their SDVX ID.
-    Usage: !linkid <SDVX_ID>
+    Usage: /linkid <SDVX_ID>
     """
     discord_id = str(ctx.author.id)
-    sdvx_id_clean = sdvx_id.replace("-", "")  # Remove hyphens
+    sdvx_id_clean = sdvx_id.replace("-", "")
 
     if not sdvx_id_clean.isdigit():
         await ctx.send(
@@ -83,30 +78,54 @@ async def linkid(ctx, sdvx_id: str):
         )
         return
 
-    # Try OAuth login using the provided ID.
-    if not BROWSER.run_oauth_login(sdvx_id_clean):
+    await ctx.send(
+        "Starting OAuth login... Please approve the browser window."
+    )
+    login_success = await asyncio.to_thread(
+        BROWSER.run_oauth_login,
+        sdvx_id_clean,
+    )
+
+    if not login_success:
         await ctx.send(
             "Failed to perform OAuth login with the provided SDVX ID. "
-            "Please ensure it's correct."
+            "Please ensure it's correct and approve the browser window."
         )
         return
 
-    user_manager.USER_LINKS[discord_id] = sdvx_id_clean
-    user_manager.save_users(user_manager.USER_LINKS)
+    global USER_LINKS
+    USER_LINKS[discord_id] = sdvx_id_clean
+    user_manager.save_users(USER_LINKS)
     await ctx.send(
-        f"Successfully linked Discord user "
-        f"`{ctx.author.display_name}` to SDVX ID "
-        f"`{sdvx_id_clean}`. OAuth login completed and cookie saved."
+        f"Successfully linked Discord user `{ctx.author.display_name}` "
+        f"to SDVX ID `{sdvx_id_clean}`. OAuth login completed "
+        f"and cookie saved."
     )
     log.info(f"Linked {ctx.author.id} to {sdvx_id_clean}")
+
+    # Now initialize headless Chrome for scraping
+    if not BROWSER.init_headless_chrome():
+        await ctx.send(
+            "Warning: Headless browser initialization failed. "
+            "Scraping commands may not work."
+        )
+        log.error(
+            "Headless browser initialization failed after OAuth."
+        )
+    else:
+        await ctx.send(
+            "Headless browser is now ready for scraping."
+        )
+        log.info(
+            "Headless browser initialized successfully after OAuth."
+        )
 
 
 @linkid.error
 async def linkid_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(
-            "Usage: `!linkid <SDVX_ID>`. "
-            "Please provide an SDVX ID."
+            "Usage: `/linkid <SDVX_ID>`. Please provide an SDVX ID."
         )
     elif isinstance(error, commands.MissingPermissions):
         await ctx.send(
@@ -114,9 +133,7 @@ async def linkid_error(ctx, error):
         )
     else:
         log.error(f"Error in linkid command: {error}")
-        await ctx.send(
-            f"An unexpected error occurred: {error}"
-        )
+        await ctx.send(f"An unexpected error occurred: {error}")
 
 
 @bot.command(
@@ -129,24 +146,35 @@ async def stats(ctx):
     total play count, and last 5 plays.
     """
     discord_id = str(ctx.author.id)
-    sdvx_id = user_manager.USER_LINKS.get(discord_id)
+    sdvx_id = USER_LINKS.get(discord_id)
 
     if not sdvx_id:
         await ctx.send(
             "Your Discord account is not linked to an SDVX ID. "
-            "Please use `!linkid <SDVX_ID>`."
+            "Please use `/linkid <SDVX_ID>`."
         )
         return
 
+    if not BROWSER.headless_driver:
+        if not BROWSER.init_headless_chrome():
+            await ctx.send(
+                "Error: Headless browser not initialized. "
+                "Cannot fetch stats."
+            )
+            log.error(
+                "Headless browser could not be initialized for /stats."
+            )
+            return
+
     await ctx.send(f"Fetching stats for SDVX ID `{sdvx_id}`...")
 
-    # Fetch VF separately as it's not on the main profile page
     current_vf = parser.get_vf_from_arcade(
-        BROWSER.headless_driver, sdvx_id
+        BROWSER.headless_driver,
+        sdvx_id,
     )
-
     profile_data = parser.scrape_profile_page(
-        BROWSER.headless_driver, sdvx_id
+        BROWSER.headless_driver,
+        sdvx_id,
     )
     if not profile_data:
         await ctx.send(
@@ -177,8 +205,8 @@ async def stats(ctx):
         f"**Volforce:** `{current_vf}`\n"
         f"**Skill Level:** `{skill_level}`\n"
         f"**Total Plays:** `{total_plays}`\n"
-        f"**Last 5 Plays:**\n" +
-        (
+        f"**Last 5 Plays:**\n"
+        + (
             "\n".join(formatted_plays)
             if formatted_plays
             else "  No recent plays found."
@@ -196,6 +224,18 @@ async def leaderboard(ctx):
     Displays the top-10 ranked players from the arcade's VF leaderboard,
     showing rank, name, and VF.
     """
+    if not BROWSER.headless_driver:
+        if not BROWSER.init_headless_chrome():
+            await ctx.send(
+                "Error: Headless browser not initialized. "
+                "Cannot fetch leaderboard."
+            )
+            log.error(
+                "Headless browser could not be initialized for "
+                "/leaderboard."
+            )
+            return
+
     await ctx.send(
         "Fetching leaderboard data. This might take a moment..."
     )
@@ -205,8 +245,7 @@ async def leaderboard(ctx):
     )
     if not leaderboard_data:
         await ctx.send(
-            "Could not retrieve leaderboard data. "
-            "The website might be down."
+            "Could not retrieve leaderboard data. The website might be down."
         )
         return
 
@@ -228,32 +267,43 @@ async def checkin(ctx):
     Records a user's current VF and play count as the start of a session.
     """
     discord_id = str(ctx.author.id)
-    sdvx_id = user_manager.USER_LINKS.get(discord_id)
+    sdvx_id = USER_LINKS.get(discord_id)
 
     if not sdvx_id:
         await ctx.send(
-            "Your Discord account is not linked to a SDVX ID. "
-            "Please use `!linkid <SDVX_ID>`."
+            "Your Discord account is not linked to an SDVX ID. "
+            "Please use `/linkid <SDVX_ID>`."
         )
         return
 
+    if not BROWSER.headless_driver:
+        if not BROWSER.init_headless_chrome():
+            await ctx.send(
+                "Error: Headless browser not initialized. Cannot check in."
+            )
+            log.error(
+                "Headless browser could not be initialized for /checkin."
+            )
+            return
+
     current_vf = parser.get_vf_from_arcade(
-        BROWSER.headless_driver, sdvx_id
+        BROWSER.headless_driver,
+        sdvx_id,
     )
     profile_data = parser.scrape_profile_page(
-        BROWSER.headless_driver, sdvx_id
+        BROWSER.headless_driver,
+        sdvx_id,
     )
     current_plays = profile_data.get("total_plays", 0)
 
     CHECKIN_STORE[discord_id] = {
         'vf': current_vf,
         'plays': current_plays,
-        'timestamp': datetime.now()
+        'timestamp': datetime.now(),
     }
     await ctx.send(
-        f"Checked in! Your current VF is `{current_vf}` "
-        f"and plays are `{current_plays}`. "
-        "Use `!checkout` to see session stats."
+        f"Checked in! Your current VF is `{current_vf}` and "
+        f"plays are `{current_plays}`. Use `/checkout` to see stats."
     )
     log.info(
         f"User {discord_id} checked in with VF {current_vf} "
@@ -273,26 +323,38 @@ async def checkout(ctx):
     discord_id = str(ctx.author.id)
 
     if discord_id not in CHECKIN_STORE:
-        await ctx.send("You haven't checked in yet! Use `!checkin` first.")
+        await ctx.send("You haven't checked in yet! Use `/checkin` first.")
         return
 
     checkin_data = CHECKIN_STORE[discord_id]
-    sdvx_id = user_manager.USER_LINKS.get(discord_id)
+    sdvx_id = USER_LINKS.get(discord_id)
 
     if not sdvx_id:
         await ctx.send(
-            "Your Discord account is not linked to a SDVX ID. "
-            "Please use `!linkid <SDVX_ID>`."
+            "Your Discord account is not linked to an SDVX ID. "
+            "Please use `/linkid <SDVX_ID>`."
         )
         return
+
+    if not BROWSER.headless_driver:
+        if not BROWSER.init_headless_chrome():
+            await ctx.send(
+                "Error: Headless browser not initialized. Cannot check out."
+            )
+            log.error(
+                "Headless browser could not be initialized for /checkout."
+            )
+            return
 
     await ctx.send("Fetching current stats for checkout...")
 
     current_vf = parser.get_vf_from_arcade(
-        BROWSER.headless_driver, sdvx_id
+        BROWSER.headless_driver,
+        sdvx_id,
     )
     profile_data = parser.scrape_profile_page(
-        BROWSER.headless_driver, sdvx_id
+        BROWSER.headless_driver,
+        sdvx_id,
     )
     current_plays = profile_data.get("total_plays", 0)
 
@@ -300,7 +362,7 @@ async def checkout(ctx):
     plays_gained = current_plays - checkin_data['plays']
     session_duration = datetime.now() - checkin_data['timestamp']
 
-    # Format duration nicely
+    # Format duration
     days, seconds = session_duration.days, session_duration.seconds
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
@@ -329,13 +391,11 @@ async def checkout(ctx):
         f"Plays Gained: {plays_gained}."
     )
 
-    # Clear check-in data after checkout
     del CHECKIN_STORE[discord_id]
 
 
 # --- Run the Bot ---
 if __name__ == "__main__":
-    # Ensure DISCORD_TOKEN is set
     discord_token = os.getenv("DISCORD_TOKEN")
     if discord_token is None:
         log.error("DISCORD_TOKEN environment variable not set. Exiting.")
@@ -345,12 +405,11 @@ if __name__ == "__main__":
         bot.run(discord_token)
     except discord.errors.LoginFailure as e:
         log.error(
-            f"Failed to log in to Discord: {e}. Please check your "
-            "DISCORD_TOKEN."
+            f"Failed to log in to Discord: {e}. "
+            "Please check your DISCORD_TOKEN."
         )
     except Exception as e:
         log.error(f"An unexpected error occurred: {e}")
     finally:
-        # Ensure the headless browser is quit when the bot stops
         BROWSER.quit_headless()
         log.info("Bot process finished.")
