@@ -4,7 +4,7 @@
 # =======================================================
 .env
 watched_players.json
-
+chrome_user_data/
 
 # =======================================================
 # Python Virtual Environments
