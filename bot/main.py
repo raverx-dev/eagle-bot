@@ -1,5 +1,4 @@
 import os
-import json
 import logging
 from datetime import datetime
 
@@ -10,16 +9,17 @@ from dotenv import load_dotenv
 from bot import config
 from bot.scraper.browser import EagleBrowser
 from bot.scraper import parser
+from bot.storage import user_manager
 
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 log = logging.getLogger(__name__)
 
 # Load environment variables
-load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 # Ensure the CHROME_USER_DATA_DIR exists
 os.makedirs(config.CHROME_USER_DATA_DIR, exist_ok=True)
@@ -28,16 +28,13 @@ os.makedirs(config.CHROME_USER_DATA_DIR, exist_ok=True)
 BROWSER = EagleBrowser()
 
 # --- Global Data Structures (to be refactored later) ---
-USER_LINKS_FILE = "watched_players.json"
-USER_LINKS = {}  # Discord ID (str) -> SDVX ID (str)
-
-# Discord ID (str) -> {'vf': int, 'plays': int, 'timestamp': datetime}
+# CHECKIN_STORE maps Discord ID (str) to dict with 'vf', 'plays', 'timestamp'
 CHECKIN_STORE = {}
 
 # --- Bot Setup ---
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True  # Required for member-related events
+intents.members = True  # Required for member-related events, if any
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -54,8 +51,7 @@ async def on_ready():
     # Initial login for cookie persistence
     if not BROWSER.init_headless_chrome():
         log.error(
-            "Failed to initialize headless browser. "
-            "Commands may not work."
+            "Failed to initialize headless browser. Commands may not work."
         )
     else:
         log.info(
@@ -63,41 +59,14 @@ async def on_ready():
         )
 
     # Load user links
-    load_user_links()
-    log.info(f"Loaded user links: {USER_LINKS}")
-
-
-# --- User Link Management ---
-def load_user_links():
-    """Loads Discord-SDVX ID links from the JSON file."""
-    if os.path.exists(USER_LINKS_FILE):
-        try:
-            with open(USER_LINKS_FILE, "r") as f:
-                USER_LINKS.update(json.load(f))
-        except json.JSONDecodeError as e:
-            log.error(f"Error loading {USER_LINKS_FILE}: {e}")
-            USER_LINKS.clear()
-    else:
-        log.info(
-            f"{USER_LINKS_FILE} not found. Starting with empty links."
-        )
-        with open(USER_LINKS_FILE, "w") as f:
-            json.dump({}, f)
-
-
-def save_user_links():
-    """Saves Discord-SDVX ID links to the JSON file."""
-    try:
-        with open(USER_LINKS_FILE, "w") as f:
-            json.dump(USER_LINKS, f, indent=4)
-    except IOError as e:
-        log.error(f"Error saving {USER_LINKS_FILE}: {e}")
+    user_manager.USER_LINKS.update(user_manager.load_users())
+    log.info(f"Loaded user links: {user_manager.USER_LINKS}")
 
 
 # --- Discord Commands ---
 @bot.command(
     name="linkid",
-    help="Links your Discord account to an SDVX ID (Admin Only).",
+    help="Link your Discord account to SDVX ID (Admin)"
 )
 @commands.has_permissions(administrator=True)
 async def linkid(ctx, sdvx_id: str):
@@ -106,7 +75,7 @@ async def linkid(ctx, sdvx_id: str):
     Usage: !linkid <SDVX_ID>
     """
     discord_id = str(ctx.author.id)
-    sdvx_id_clean = sdvx_id.replace("-", "")
+    sdvx_id_clean = sdvx_id.replace("-", "")  # Remove hyphens
 
     if not sdvx_id_clean.isdigit():
         await ctx.send(
@@ -114,7 +83,7 @@ async def linkid(ctx, sdvx_id: str):
         )
         return
 
-    # Try to perform OAuth login using the provided ID.
+    # Try OAuth login using the provided ID.
     if not BROWSER.run_oauth_login(sdvx_id_clean):
         await ctx.send(
             "Failed to perform OAuth login with the provided SDVX ID. "
@@ -122,8 +91,8 @@ async def linkid(ctx, sdvx_id: str):
         )
         return
 
-    USER_LINKS[discord_id] = sdvx_id_clean
-    save_user_links()
+    user_manager.USER_LINKS[discord_id] = sdvx_id_clean
+    user_manager.save_users(user_manager.USER_LINKS)
     await ctx.send(
         f"Successfully linked Discord user "
         f"`{ctx.author.display_name}` to SDVX ID "
@@ -136,18 +105,23 @@ async def linkid(ctx, sdvx_id: str):
 async def linkid_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(
-            "Usage: `!linkid <SDVX_ID>`. Please provide an SDVX ID."
+            "Usage: `!linkid <SDVX_ID>`. "
+            "Please provide an SDVX ID."
         )
     elif isinstance(error, commands.MissingPermissions):
-        await ctx.send("You don't have permission to use this command.")
+        await ctx.send(
+            "You don't have permission to use this command."
+        )
     else:
         log.error(f"Error in linkid command: {error}")
-        await ctx.send(f"An unexpected error occurred: {error}")
+        await ctx.send(
+            f"An unexpected error occurred: {error}"
+        )
 
 
 @bot.command(
     name="stats",
-    help="Displays your current SDVX stats.",
+    help="Displays your current SDVX stats."
 )
 async def stats(ctx):
     """
@@ -155,7 +129,7 @@ async def stats(ctx):
     total play count, and last 5 plays.
     """
     discord_id = str(ctx.author.id)
-    sdvx_id = USER_LINKS.get(discord_id)
+    sdvx_id = user_manager.USER_LINKS.get(discord_id)
 
     if not sdvx_id:
         await ctx.send(
@@ -166,16 +140,18 @@ async def stats(ctx):
 
     await ctx.send(f"Fetching stats for SDVX ID `{sdvx_id}`...")
 
+    # Fetch VF separately as it's not on the main profile page
     current_vf = parser.get_vf_from_arcade(
         BROWSER.headless_driver, sdvx_id
     )
+
     profile_data = parser.scrape_profile_page(
         BROWSER.headless_driver, sdvx_id
     )
     if not profile_data:
         await ctx.send(
-            "Could not retrieve profile data. The website might "
-            "be down or your ID is incorrect."
+            "Could not retrieve profile data. Site may be down "
+            "or your ID is incorrect."
         )
         return
 
@@ -192,31 +168,37 @@ async def stats(ctx):
         score = play.get("score", "N/A")
         time_ago = play.get("time_ago", "N/A")
         formatted_plays.append(
-            f"• {title} {difficulty} {level} PLAYED {score} ({time_ago})"
+            f"• {title} {difficulty} {level} "
+            f"PLAYED {score} ({time_ago})"
         )
 
     response = (
-        "**__Your SDVX Stats:__**\n"
+        f"**__Your SDVX Stats:__**\n"
         f"**Volforce:** `{current_vf}`\n"
         f"**Skill Level:** `{skill_level}`\n"
         f"**Total Plays:** `{total_plays}`\n"
-        "**Last 5 Plays:**\n" +
-        ("\n".join(formatted_plays) if formatted_plays else
-         "  No recent plays found.")
+        f"**Last 5 Plays:**\n" +
+        (
+            "\n".join(formatted_plays)
+            if formatted_plays
+            else "  No recent plays found."
+        )
     )
     await ctx.send(response)
 
 
 @bot.command(
     name="leaderboard",
-    help="Displays the top 10 players on the arcade leaderboard.",
+    help="Displays the top 10 players on the arcade leaderboard."
 )
 async def leaderboard(ctx):
     """
     Displays the top-10 ranked players from the arcade's VF leaderboard,
     showing rank, name, and VF.
     """
-    await ctx.send("Fetching leaderboard data. This might take a moment...")
+    await ctx.send(
+        "Fetching leaderboard data. This might take a moment..."
+    )
 
     leaderboard_data = parser.scrape_leaderboard(
         BROWSER.headless_driver
@@ -231,27 +213,26 @@ async def leaderboard(ctx):
     response = "**__Arcade Top 10 Volforce Leaderboard:__**\n"
     for player in leaderboard_data:
         response += (
-            f"**Rank {player['rank']}**: {player['name']} — "
-            f"`{player['vf']} VF`\n"
+            f"**Rank {player['rank']}**: {player['name']} "
+            f"— `{player['vf']} VF`\n"
         )
     await ctx.send(response)
 
 
 @bot.command(
     name="checkin",
-    help="Records your current VF and play count for a session.",
+    help="Records your current VF and play count for a session."
 )
 async def checkin(ctx):
     """
-    Records a user's current VF and play count as the start
-    of a session.
+    Records a user's current VF and play count as the start of a session.
     """
     discord_id = str(ctx.author.id)
-    sdvx_id = USER_LINKS.get(discord_id)
+    sdvx_id = user_manager.USER_LINKS.get(discord_id)
 
     if not sdvx_id:
         await ctx.send(
-            "Your Discord account is not linked to an SDVX ID. "
+            "Your Discord account is not linked to a SDVX ID. "
             "Please use `!linkid <SDVX_ID>`."
         )
         return
@@ -265,15 +246,111 @@ async def checkin(ctx):
     current_plays = profile_data.get("total_plays", 0)
 
     CHECKIN_STORE[discord_id] = {
-        "vf": current_vf,
-        "plays": current_plays,
-        "timestamp": datetime.now(),
+        'vf': current_vf,
+        'plays': current_plays,
+        'timestamp': datetime.now()
     }
     await ctx.send(
-        f"Checked in! Your current VF is `{current_vf}` and plays are "
-        f"`{current_plays}`. Use `!checkout` to see session stats."
+        f"Checked in! Your current VF is `{current_vf}` "
+        f"and plays are `{current_plays}`. "
+        "Use `!checkout` to see session stats."
     )
     log.info(
-        f"User {discord_id} checked in with VF {current_vf} and "
-        f"plays {current_plays}."
+        f"User {discord_id} checked in with VF {current_vf} "
+        f"and plays {current_plays}."
     )
+
+
+@bot.command(
+    name="checkout",
+    help="Compares current stats to your last check-in."
+)
+async def checkout(ctx):
+    """
+    Compares current stats to the last check-in and shows VF gained,
+    plays gained, and session duration.
+    """
+    discord_id = str(ctx.author.id)
+
+    if discord_id not in CHECKIN_STORE:
+        await ctx.send("You haven't checked in yet! Use `!checkin` first.")
+        return
+
+    checkin_data = CHECKIN_STORE[discord_id]
+    sdvx_id = user_manager.USER_LINKS.get(discord_id)
+
+    if not sdvx_id:
+        await ctx.send(
+            "Your Discord account is not linked to a SDVX ID. "
+            "Please use `!linkid <SDVX_ID>`."
+        )
+        return
+
+    await ctx.send("Fetching current stats for checkout...")
+
+    current_vf = parser.get_vf_from_arcade(
+        BROWSER.headless_driver, sdvx_id
+    )
+    profile_data = parser.scrape_profile_page(
+        BROWSER.headless_driver, sdvx_id
+    )
+    current_plays = profile_data.get("total_plays", 0)
+
+    vf_gained = current_vf - checkin_data['vf']
+    plays_gained = current_plays - checkin_data['plays']
+    session_duration = datetime.now() - checkin_data['timestamp']
+
+    # Format duration nicely
+    days, seconds = session_duration.days, session_duration.seconds
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    if days > 0:
+        duration_str = f"{days}d {hours}h {minutes}m"
+    elif hours > 0:
+        duration_str = f"{hours}h {minutes}m"
+    else:
+        duration_str = (
+            f"{minutes}m" if minutes > 0 else "less than a minute"
+        )
+
+    response = (
+        f"**__Session Summary:__**\n"
+        f"**Check-in VF:** `{checkin_data['vf']}`\n"
+        f"**Current VF:** `{current_vf}`\n"
+        f"**VF Gained:** `{vf_gained}`\n"
+        f"**Check-in Plays:** `{checkin_data['plays']}`\n"
+        f"**Current Plays:** `{current_plays}`\n"
+        f"**Plays Gained:** `{plays_gained}`\n"
+        f"**Session Duration:** `{duration_str}`"
+    )
+    await ctx.send(response)
+    log.info(
+        f"User {discord_id} checked out. VF Gained: {vf_gained}, "
+        f"Plays Gained: {plays_gained}."
+    )
+
+    # Clear check-in data after checkout
+    del CHECKIN_STORE[discord_id]
+
+
+# --- Run the Bot ---
+if __name__ == "__main__":
+    # Ensure DISCORD_TOKEN is set
+    discord_token = os.getenv("DISCORD_TOKEN")
+    if discord_token is None:
+        log.error("DISCORD_TOKEN environment variable not set. Exiting.")
+        exit(1)
+
+    try:
+        bot.run(discord_token)
+    except discord.errors.LoginFailure as e:
+        log.error(
+            f"Failed to log in to Discord: {e}. Please check your "
+            "DISCORD_TOKEN."
+        )
+    except Exception as e:
+        log.error(f"An unexpected error occurred: {e}")
+    finally:
+        # Ensure the headless browser is quit when the bot stops
+        BROWSER.quit_headless()
+        log.info("Bot process finished.")
