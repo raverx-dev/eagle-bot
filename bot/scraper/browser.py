@@ -88,8 +88,14 @@ class EagleBrowser:
                     "logged in."
                 )
 
+            # Reverted XPath to be more robust, matching original functionality
+            auth_btn_xpath = (
+                "//button[contains(text(),'Authorize') or "
+                "contains(text(),'Allow') or "
+                "contains(text(),'approve') or "
+                "contains(text(),'Authorize Eagle Bot')]"
+            )
             try:
-                auth_btn_xpath = "//button[contains(text(),'Authorize')]"
                 authorize_btn = wait.until(
                     EC.element_to_be_clickable(
                         (By.XPATH, auth_btn_xpath)

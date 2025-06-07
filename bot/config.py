@@ -25,6 +25,6 @@ CHROME_DRIVER_PATH = os.getenv("CHROME_DRIVER_PATH",
 
 # Define paths for Chrome user data and profile to persist cookies
 # These directories will be created if they don't exist
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CHROME_USER_DATA_DIR = os.path.join(BASE_DIR, "chrome_user_data")
+# Reverting to the original path for existing cookie reuse
+CHROME_USER_DATA_DIR = os.path.expanduser("~/.selenium_profiles/eaglebot_profile")
 CHROME_PROFILE_DIR = "Default"
