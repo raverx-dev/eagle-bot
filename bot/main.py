@@ -2,63 +2,24 @@
 # FILE: bot/main.py
 # ──────────────────────────────────────────────────────────────────────────────
 
-import os
-import threading
-import datetime
 import asyncio
-import logging
+import datetime
 
 import discord
 from discord.ext import commands
 
-from dotenv import load_dotenv
-from bs4 import BeautifulSoup
+# Import configuration from the new config module
+from bot.config import DISCORD_BOT_TOKEN, ARCADE_ID, log, EAGLE_EMAIL, EAGLE_PASSWORD, \
+    CHROME_DRIVER_PATH, CHROME_USER_DATA_DIR, CHROME_PROFILE_DIR
 
-# Selenium imports (for both headed OAuth automation & headless scraping)
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
+# Import browser and scraping functions (placeholders for now, will be moved later)
+# Assuming these will be available globally or passed in.
+# For this step, we keep the original definition of EagleBrowser and scraping functions
+# as they haven't been moved yet. This is a temporary state.
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Load environment variables
-# ──────────────────────────────────────────────────────────────────────────────
-load_dotenv()
-
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "").strip()
-if not DISCORD_BOT_TOKEN:
-    raise RuntimeError("You must set DISCORD_BOT_TOKEN in .env")
-
-EAGLE_EMAIL    = os.getenv("EAGLE_EMAIL", "").strip()
-EAGLE_PASSWORD = os.getenv("EAGLE_PASSWORD", "").strip()
-if not (EAGLE_EMAIL and EAGLE_PASSWORD):
-    raise RuntimeError("You must set EAGLE_EMAIL and EAGLE_PASSWORD in .env")
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  Paths to ChromeDriver & Chrome user‐data
-# ──────────────────────────────────────────────────────────────────────────────
-CHROME_DRIVER_PATH = "/usr/bin/chromedriver"  # Adjust if your chromedriver lives elsewhere
-
-# We will store (and later reuse) the “logged-in” Eagle session cookie here:
-CHROME_USER_DATA_DIR = os.path.expanduser("~/.selenium_profiles/eaglebot_profile")
-CHROME_PROFILE_DIR   = "Default"
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  Basic logging setup
-# ──────────────────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-log = logging.getLogger("eagle_bot")
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  In‐memory mapping: { discord_user_id (int) : sdvx_id (str) }
-#  Admins must run !linkid once per Discord user to populate this.
+# In‐memory mapping: { discord_user_id (int) : sdvx_id (str) }
+# Admins must run !linkid once per Discord user to populate this.
 # ──────────────────────────────────────────────────────────────────────────────
 USER_LINKS = {
     # Example:
@@ -66,28 +27,29 @@ USER_LINKS = {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  A single “headed” Chrome instance for OAuth + an invisible headless one for scraping
+# A single “headed” Chrome instance for OAuth + an invisible headless one for scraping
+# (This class and its functions will be moved to eagle_browser.py later)
 # ──────────────────────────────────────────────────────────────────────────────
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, WebDriverException
+from bs4 import BeautifulSoup
+
+
 class EagleBrowser:
     def __init__(self):
         self.headless_driver = None
 
     def run_oauth_login(self, sdvx_id: str) -> bool:
-        """
-        Open a *visible* Chrome window to:
-          1) Go to the SDVX profile URL → triggers OAuth redirect to kailua
-          2) Fill in EAGLE_EMAIL & EAGLE_PASSWORD at the login form
-          3) Click the “Authorize” (or “Allow”) button
-          4) Wait until redirected back to the real Sound Voltex profile page
-        This writes a valid eagle.ac cookie into CHROME_USER_DATA_DIR.
-        """
         log.info("🔐 Starting OAuth login flow in a visible Chrome window…")
 
         options = Options()
-        # Use the same profile folder so that cookies get saved to it:
         options.add_argument(f"--user-data-dir={CHROME_USER_DATA_DIR}")
         options.add_argument(f"--profile-directory={CHROME_PROFILE_DIR}")
-        # Do not run headless here; we need to see the login page
         options.add_argument("--disable-gpu")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
@@ -100,16 +62,14 @@ class EagleBrowser:
             return False
 
         try:
-            # Step A: Navigate to the SDVX profile URL. Eagle will redirect to OAuth login.
             target_url = f"https://eagle.ac/game/sdvx/profile/{sdvx_id}"
             driver.get(target_url)
 
             wait = WebDriverWait(driver, 15)
 
-            # Step B: Fill in the Eagle login form (if present).
             try:
                 email_fld = wait.until(EC.presence_of_element_located((By.NAME, "email")))
-                pass_fld  = driver.find_element(By.NAME, "password")
+                pass_fld = driver.find_element(By.NAME, "password")
                 email_fld.clear()
                 email_fld.send_keys(EAGLE_EMAIL)
                 pass_fld.clear()
@@ -117,10 +77,8 @@ class EagleBrowser:
                 pass_fld.submit()
                 log.info("✅ Submitted Eagle credentials.")
             except TimeoutException:
-                # Possibly already logged in to kailua/eagle or no login form shown.
-                log.info("ℹ️  No login form detected; assuming already logged into kailua/eagle.")
+                log.info("ℹ️ No login form detected; assuming already logged into kailua/eagle.")
 
-            # Step C: Wait for the “Authorize Application” button (it may say “Allow” or “Authorize”).
             try:
                 authorize_btn = wait.until(EC.element_to_be_clickable(
                     (By.XPATH,
@@ -130,9 +88,8 @@ class EagleBrowser:
                 authorize_btn.click()
                 log.info("✅ Clicked ‘Authorize’ button.")
             except TimeoutException:
-                log.info("ℹ️  No ‘Authorize’ button detected; maybe already authorized previously.")
+                log.info("ℹ️ No ‘Authorize’ button detected; maybe already authorized previously.")
 
-            # Step D: Wait until the page title includes “Sound Voltex”
             try:
                 wait.until(EC.title_contains("Sound Voltex"))
                 log.info("✅ OAuth login complete; session cookie for eagle.ac is now stored.")
@@ -153,11 +110,7 @@ class EagleBrowser:
             return False
 
     def init_headless_chrome(self) -> bool:
-        """
-        Launch a headless ChromeDriver instance that reuses the profile directory,
-        so we can scrape pages without any visible window.
-        """
-        log.info("☁️  Initializing headless ChromeDriver for scraping…")
+        log.info("☁️ Initializing headless ChromeDriver for scraping…")
         options = Options()
         options.add_argument("--headless=new")
         options.add_argument("--disable-gpu")
@@ -188,20 +141,16 @@ class EagleBrowser:
 BROWSER = EagleBrowser()
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Helper: parse raw HTML into BeautifulSoup
+# Helper: parse raw HTML into BeautifulSoup
 # ──────────────────────────────────────────────────────────────────────────────
 def parse_html(html: str) -> BeautifulSoup:
     return BeautifulSoup(html, "html.parser")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Scrape a player’s profile page for Skill, Plays, Packet, Block.
+# Scrape a player’s profile page for Skill, Plays, Packet, Block.
 # ──────────────────────────────────────────────────────────────────────────────
 def scrape_profile_page(sdvx_id: str) -> dict:
-    """
-    Visit https://eagle.ac/game/sdvx/profile/{sdvx_id} using headless Chrome,
-    and return a dict with keys: { 'skill', 'plays', 'packet', 'block' }.
-    """
     result = {
         "skill": "—",
         "plays": "—",
@@ -217,28 +166,24 @@ def scrape_profile_page(sdvx_id: str) -> dict:
     html = driver.page_source
     soup = parse_html(html)
 
-    # The stats are in the right-hand sidebar, inside <ul class="list-group">
     sidebar_ul = soup.find("ul", {"class": "list-group"})
     if not sidebar_ul:
         return result
 
     for li in sidebar_ul.find_all("li", class_="list-group-item"):
         text = li.get_text(separator=" ", strip=True)
-        # Skill Level
         if text.startswith("Skill Level:"):
             try:
                 skill_text = text.split("for")[0].replace("Skill Level:", "").strip()
                 result["skill"] = skill_text
             except:
                 pass
-        # Plays
         elif text.startswith("Plays:"):
             try:
                 plays_val = text.replace("Plays:", "").strip().replace(",", "")
                 result["plays"] = plays_val
             except:
                 pass
-        # Packet / Block
         elif text.startswith("Packet:"):
             try:
                 parts = text.replace("Packet:", "").split("Block:")
@@ -253,13 +198,9 @@ def scrape_profile_page(sdvx_id: str) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Scrape the arcade leaderboard (top 10) from https://eagle.ac/arcade/{arcade_id}.
+# Scrape the arcade leaderboard (top 10) from https://eagle.ac/arcade/{arcade_id}.
 # ──────────────────────────────────────────────────────────────────────────────
 def scrape_leaderboard(arcade_id: str) -> list:
-    """
-    Returns a list of dicts for the top 10:
-    [ { "rank": "1", "sdvx_id": "1266-6165", "name": "#-FINN-#", "vf": "17.020" }, ... ]
-    """
     driver = BROWSER.headless_driver
     url = f"https://eagle.ac/arcade/{arcade_id}"
     driver.get(url)
@@ -268,17 +209,14 @@ def scrape_leaderboard(arcade_id: str) -> list:
     html = driver.page_source
     soup = parse_html(html)
 
-    # Find the <h3 class="panel-title">Sound Voltex - Arcade Top 10</h3>
     h3 = soup.find("h3", class_="panel-title", string=lambda t: t and "Arcade Top 10" in t)
     if not h3:
         return []
 
-    # The panel containing that heading has class "panel panel-primary"
     panel_div = h3.find_parent("div", class_="panel-primary")
     if not panel_div:
         return []
 
-    # Inside that panel, find the <table> for the leaderboard
     lead_table = panel_div.find("table", {"class": "table"})
     if not lead_table:
         return []
@@ -288,10 +226,10 @@ def scrape_leaderboard(arcade_id: str) -> list:
         cols = row.find_all("td")
         if len(cols) < 4:
             continue
-        rank    = cols[0].get_text(strip=True)
+        rank = cols[0].get_text(strip=True)
         sdvx_id = cols[1].get_text(strip=True)
-        name    = cols[2].get_text(strip=True)
-        vf_val  = cols[3].get_text(strip=True)
+        name = cols[2].get_text(strip=True)
+        vf_val = cols[3].get_text(strip=True)
         output.append({
             "rank": rank,
             "sdvx_id": sdvx_id,
@@ -302,23 +240,18 @@ def scrape_leaderboard(arcade_id: str) -> list:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Utility: Look up a single player's VF in the Arcade Top 10 by comparing IDs
+# Utility: Look up a single player's VF in the Arcade Top 10 by comparing IDs
 # ──────────────────────────────────────────────────────────────────────────────
 def get_vf_from_arcade(sdvx_id: str) -> str:
-    """
-    Given an SDVX ID without hyphens (e.g. "95688187"), attempt to find that
-    player in the Arcade Top 10 and return their VF. If not found, return "—".
-    """
     board = scrape_leaderboard(ARCADE_ID)
     for entry in board:
-        # entry["sdvx_id"] has hyphens, e.g. "9568-8187"
         if entry["sdvx_id"].replace("-", "") == sdvx_id:
             return entry["vf"]
     return "—"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  DISCORD BOT SETUP (prefix commands)
+# DISCORD BOT SETUP (prefix commands)
 # ──────────────────────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.message_content = True
@@ -350,7 +283,7 @@ async def on_ready():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  !linkid (Admin only) → map a Discord user → SDVX ID
+# !linkid (Admin only) → map a Discord user → SDVX ID
 # ──────────────────────────────────────────────────────────────────────────────
 @bot.command(name="linkid")
 @commands.has_permissions(administrator=True)
@@ -377,7 +310,7 @@ async def linkid(ctx: commands.Context, sdvx_id: str):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  !stats → display Skill/Plays/Packet/Block/VF for the invoking user
+# !stats → display Skill/Plays/Packet/Block/VF for the invoking user
 # ──────────────────────────────────────────────────────────────────────────────
 @bot.command(name="stats")
 async def stats(ctx: commands.Context):
@@ -396,17 +329,17 @@ async def stats(ctx: commands.Context):
         title=f"📊 Stats for {ctx.author.display_name} ({sdvx_id})",
         color=discord.Color.blue()
     )
-    embed.add_field(name="Skill Level",    value=data.get("skill", "—"), inline=True)
-    embed.add_field(name="Total Plays",    value=data.get("plays", "—"), inline=True)
-    embed.add_field(name="Packet",         value=data.get("packet", "—"), inline=True)
-    embed.add_field(name="Block",          value=data.get("block", "—"), inline=True)
-    embed.add_field(name="Volforce (VF)",  value=vf_val, inline=False)
+    embed.add_field(name="Skill Level", value=data.get("skill", "—"), inline=True)
+    embed.add_field(name="Total Plays", value=data.get("plays", "—"), inline=True)
+    embed.add_field(name="Packet", value=data.get("packet", "—"), inline=True)
+    embed.add_field(name="Block", value=data.get("block", "—"), inline=True)
+    embed.add_field(name="Volforce (VF)", value=vf_val, inline=False)
 
     await ctx.send(embed=embed)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  !checkin → same as !stats but with a green “Checked In” heading
+# !checkin → same as !stats but with a green “Checked In” heading
 # ──────────────────────────────────────────────────────────────────────────────
 @bot.command(name="checkin")
 async def checkin(ctx: commands.Context):
@@ -424,7 +357,7 @@ async def checkin(ctx: commands.Context):
     embed = discord.Embed(
         title="✅ Checked In",
         description=(
-            f"SDVX ID {sdvx_id}  •  Skill Level {data.get('skill','—')}  •  Total Plays {data.get('plays','—')}  •  VF {vf_val}"
+            f"SDVX ID {sdvx_id} • Skill Level {data.get('skill','—')} • Total Plays {data.get('plays','—')} • VF {vf_val}"
         ),
         color=discord.Color.green()
     )
@@ -449,7 +382,7 @@ async def checkin(ctx: commands.Context):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  !checkout → compare to last check‐in, show Plays & VF gained + duration
+# !checkout → compare to last check‐in, show Plays & VF gained + duration
 # ──────────────────────────────────────────────────────────────────────────────
 CHECKIN_STORE = {}  # { discord_user_id: { "time": datetime, "plays": int, "vf": float } }
 
@@ -488,9 +421,9 @@ async def checkout(ctx: commands.Context):
     embed = discord.Embed(
         title="🏁 Checked Out",
         description=(
-            f"Plays at Check‐in {old['plays']}  •  Plays Now {current_plays}  •  Plays Gained {plays_gained}\n"
-            f"VF at Check‐in {old['vf']:.3f}  •  VF Now {current_vf:.3f}  •  VF Gained {vf_gained:.3f}\n"
-            f"Session Duration {str(elapsed).split('.')[0]}"
+            f"Plays at Check‐in {old['plays']} • Plays Now {current_plays} • Plays Gained {plays_gained}\n"
+            f"VF at Check‐in {old['vf']:.3f} • VF Now {current_vf:.3f} • VF Gained {vf_gained:.3f}\n"
+            f"Session Duration {str(elapsed).split('.')[0]}"
         ),
         color=discord.Color.blue()
     )
@@ -499,10 +432,8 @@ async def checkout(ctx: commands.Context):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  !leaderboard → show the arcade’s Top‐10 VF leaderboard (Arcade #94 by default)
+# !leaderboard → show the arcade’s Top‐10 VF leaderboard (Arcade #94 by default)
 # ──────────────────────────────────────────────────────────────────────────────
-ARCADE_ID = "94"  # ← change to your own arcade number if it’s different
-
 @bot.command(name="leaderboard")
 async def leaderboard(ctx: commands.Context):
     await ctx.send("🔄 Fetching Arcade Top-10 VF leaderboard…")
@@ -513,7 +444,7 @@ async def leaderboard(ctx: commands.Context):
 
     lines = []
     for entry in board:
-        lines.append(f"**{entry['rank']}.**  {entry['name']}  (`{entry['sdvx_id']}`) — {entry['vf']} VF")
+        lines.append(f"**{entry['rank']}.** {entry['name']} (`{entry['sdvx_id']}`) — {entry['vf']} VF")
 
     embed = discord.Embed(
         title="🏆 Electric Starship Arcade – SDVX Top 10",
@@ -524,7 +455,7 @@ async def leaderboard(ctx: commands.Context):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Run the bot
+# Run the bot
 # ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     bot.run(DISCORD_BOT_TOKEN)
