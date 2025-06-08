@@ -34,12 +34,25 @@ def load_linked_players():
     """
     Loads linked player data from the persistent JSON file.
     Returns a dictionary of linked players or an empty dictionary if the file
-    does not exist or is empty.
+    does not exist, is empty, or encounters an error during parsing.
 
     This function first checks for the existence of the configured JSON file.
     If the file does not exist, it implies no linked player data has been
     saved yet, and an empty dictionary is returned to initialize USER_LINKS.
-    The next step will involve reading and parsing the file if it exists.
+    If the file exists, it attempts to read and parse the JSON content.
+    Error handling is included for file reading or JSON parsing issues,
+    ensuring the bot's stability even with corrupted or malformed data files.
+    The keys (Discord user IDs) are converted to integers upon loading, as
+    JSON stores object keys as strings, but Discord IDs are numerical.
     """
     if not os.path.exists(LINKED_PLAYERS_FILE):
+        return {}
+
+    try:
+        with open(LINKED_PLAYERS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            converted_data = {int(k): v for k, v in data.items()}
+            return converted_data
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"Error loading linked players from {LINKED_PLAYERS_FILE}: {e}")
         return {}
