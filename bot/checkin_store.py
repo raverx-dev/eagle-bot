@@ -56,3 +56,19 @@ def load_linked_players():
     except (json.JSONDecodeError, IOError) as e:
         print(f"Error loading linked players from {LINKED_PLAYERS_FILE}: {e}")
         return {}
+
+def save_linked_players(linked_players_data):
+    """
+    Saves the current linked player data to the persistent JSON file.
+    This function ensures the data directory exists before writing the file.
+    Any errors during file writing or JSON serialization are caught and logged.
+    """
+    os.makedirs(DATA_DIR, exist_ok=True) # Ensure data directory exists
+
+    try:
+        with open(LINKED_PLAYERS_FILE, 'w', encoding='utf-8') as f:
+            # JSON keys must be strings. Convert integer Discord IDs to strings for saving.
+            serialized_data = {str(k): v for k, v in linked_players_data.items()}
+            json.dump(serialized_data, f, indent=4)
+    except IOError as e:
+        print(f"Error saving linked players to {LINKED_PLAYERS_FILE}: {e}")
