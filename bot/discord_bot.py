@@ -3,7 +3,7 @@ from discord.ext import commands
 import asyncio
 import os
 import sys
-import datetime 
+import datetime # Added this import to resolve NameError for datetime
 
 # Add the parent directory to the Python path to allow imports from 'bot' package
 # This is crucial for running the bot correctly from the project root.
@@ -42,15 +42,24 @@ async def on_ready():
     # Only attempt OAuth login if users are linked and OAUTH_LOGIN_ENABLED is True
     if USER_LINKS and OAUTH_LOGIN_ENABLED:
         log.info("DISCORD_BOT: Linked users found and OAuth login enabled. Starting OAuth login flow.")
+        
+        # Get the first linked SDVX ID for OAuth login
+        first_sdvx = next(iter(USER_LINKS.values()))
+        loop = asyncio.get_event_loop()
+
         try:
-            # Get the first linked SDVX ID to pass to run_oauth_login
-            # This uses a linked ID as per the status report's root cause analysis.
-            first_sdvx_id = next(iter(USER_LINKS.values()), None)
-            if first_sdvx_id:
-                await BROWSER.run_oauth_login(first_sdvx_id)
+            # Run the synchronous OAuth login in a separate thread
+            login_success = await loop.run_in_executor(None, BROWSER.run_oauth_login, first_sdvx)
+            if login_success:
                 log.info("DISCORD_BOT: OAuth login automation completed successfully.")
+                # Initialize headless Chrome after successful login
+                headless_success = await loop.run_in_executor(None, BROWSER.init_headless_chrome)
+                if not headless_success:
+                    log.error("DISCORD_BOT: Headless ChromeDriver initialization failed. Scraping commands will not work.")
+                else:
+                    log.info("DISCORD_BOT: Headless ChromeDriver is ready (authenticated).")
             else:
-                log.warning("DISCORD_BOT: USER_LINKS is not empty but no SDVX ID found to use for OAuth. Skipping OAuth login.")
+                log.error("DISCORD_BOT: OAuth login automation failed. The bot will not be able to scrape without a valid eagle.ac cookie.")
         except Exception as e:
             log.error(f"DISCORD_BOT: OAuth login automation failed: {e}")
             log.warning("DISCORD_BOT: The bot will not be able to scrape without a valid eagle.ac cookie.")
@@ -151,7 +160,6 @@ async def show_leaderboard(ctx):
         leaderboard_data = scrape_leaderboard(BROWSER)
         formatted_leaderboard = "\n".join([f"{i+1}. {p['name']} ({p['vf']})" for i, p in enumerate(leaderboard_data)])
         await ctx.send(f"**Arcade Leaderboard Top 10:**\n{formatted_leaderboard}")
-        log.info("Fetched leaderboard.")
     except Exception as e:
         await ctx.send(f"Could not fetch leaderboard. Error: {e}")
         log.error(f"Failed to fetch leaderboard: {e}")
