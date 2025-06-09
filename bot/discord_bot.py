@@ -1,21 +1,24 @@
-import os
 import discord
 from discord.ext import commands
-from bot.config import log, DISCORD_BOT_TOKEN
+import asyncio
+import os
+import sys
+
+# Add the parent directory to the Python path to allow imports from 'bot' package
+# This is crucial for running the bot correctly from the project root.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from bot.config import log, OAUTH_LOGIN_ENABLED
 from bot.eagle_browser import BROWSER
 from bot.scraper import scrape_profile_page, get_vf_from_arcade, scrape_leaderboard
-from bot.checkin_store import CHECKIN_STORE, USER_LINKS, load_linked_players, save_linked_players
+from bot.checkin_store import USER_LINKS, CHECKIN_STORE, load_linked_players, save_linked_players
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Discord Bot Setup
 # ──────────────────────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
-intents.messages = True
-intents.guilds = True
-intents.message_content = True
-intents.members = True # Required for member-related events like role/nickname changes
-
-bot = commands.Bot(command_prefix="!", intents=intents)
+intents.message_content = True # Required for accessing message.content
+bot = commands.Bot(command_prefix='!', intents=intents)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Bot Events
@@ -23,113 +26,125 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.event
 async def on_ready():
     """
-    Event handler that runs when the bot successfully connects to Discord.
-    It logs bot information, attempts OAuth login, and loads persistent data.
+    Event that fires when the bot has successfully connected to Discord.
+    It logs the bot's readiness and performs initial setup tasks like
+    loading persistent data and potentially initiating OAuth login.
     """
-    log.info(f"Bot is online as {bot.user.name} (ID {bot.user.id})")
-    
-    # Existing OAuth login flow check. This happens before USER_LINKS is populated below.
-    if not USER_LINKS: # USER_LINKS is still empty here as it's not yet loaded from file
-        log.warning("⚠️ No users linked (USER_LINKS is empty). Skipping OAuth login. Please run /linkid for at least one user and restart the bot.")
-    else:
-        # This branch might be executed if USER_LINKS has *already* been manually populated
-        # or if previous logic populated it. With current changes, it will be empty here.
-        log.info("🔐 Starting OAuth login flow in a visible Chrome window…")
-        try:
-            # Assumes BROWSER object handles login. If login fails, BROWSER might not be ready.
-            if await BROWSER.login_oauth():
-                log.info("✅ OAuth login successful. Bot ready to scrape.")
-            else:
-                log.error("❌ OAuth login automation failed. The bot will not be able to scrape without a valid eagle.ac cookie.")
-        except Exception as e:
-            log.error(f"❌ An error occurred during OAuth login automation: {e}")
-            log.error("The bot will not be able to scrape without a valid eagle.ac cookie.")
+    log.info(f"Bot is online as {bot.user} (ID {bot.user.id})")
 
-    # Load linked players from persistent storage AFTER OAuth login (or attempt thereof)
+    # Load linked players from persistent storage when bot is ready
     log.info("DISCORD_BOT: Attempting to load USER_LINKS from checkin_store in on_ready.")
     loaded_users = load_linked_players()
-    if loaded_users:
-        USER_LINKS.update(loaded_users)
-        log.info(f"DISCORD_BOT: USER_LINKS updated with {len(USER_LINKS)} entries in on_ready.")
-    else:
-        log.info("DISCORD_BOT: No linked players loaded or file not found in on_ready. USER_LINKS remains empty.")
+    USER_LINKS.update(loaded_users)
+    log.info(f"DISCORD_BOT: USER_LINKS updated with {len(USER_LINKS)} entries in on_ready.")
 
-
-@bot.event
-async def on_command_error(ctx, error):
-    """
-    Event handler for command errors.
-    """
-    if isinstance(error, commands.CommandNotFound):
-        await ctx.send("Sorry, I don't know that command.")
+    # Only attempt OAuth login if users are linked and OAUTH_LOGIN_ENABLED is True
+    if USER_LINKS and OAUTH_LOGIN_ENABLED:
+        log.info("DISCORD_BOT: Linked users found and OAuth login enabled. Starting OAuth login flow.")
+        try:
+            await BROWSER.oauth_login()
+            log.info("DISCORD_BOT: OAuth login automation completed successfully.")
+        except Exception as e:
+            log.error(f"DISCORD_BOT: OAuth login automation failed: {e}")
+            log.warning("DISCORD_BOT: The bot will not be able to scrape without a valid eagle.ac cookie.")
     else:
-        log.error(f"Error in command {ctx.command}: {error}")
-        await ctx.send("An error occurred while processing your command.")
+        if not USER_LINKS:
+            log.warning("DISCORD_BOT: ⚠️ No users linked (USER_LINKS is empty). Skipping OAuth login. Please run /linkid for at least one user and restart the bot.")
+        elif not OAUTH_LOGIN_ENABLED:
+            log.info("DISCORD_BOT: OAuth login explicitly disabled in config. Skipping OAuth login.")
+
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Bot Commands (Example - more commands would be added here)
+# Commands
 # ──────────────────────────────────────────────────────────────────────────────
-@bot.command(name="linkid")
-async def link_user_id(ctx, sdvx_id: str):
+@bot.command(name='linkid')
+async def link_id(ctx, sdvx_id: str):
     """
-    Links a Discord user to an SDVX ID.
-    Example: !linkid 123456789
+    Links a Discord user to their SDVX ID.
+    Usage: !linkid <sdvx_id>
     """
-    try:
-        user_id = ctx.author.id
-        USER_LINKS[user_id] = sdvx_id
-        save_linked_players(USER_LINKS) # Save updated USER_LINKS to file
-        await ctx.send(f"Successfully linked Discord user {ctx.author.display_name} to SDVX ID: {sdvx_id}")
-        log.info(f"Linked {ctx.author.display_name} (Discord ID: {user_id}) to SDVX ID: {sdvx_id}")
-    except Exception as e:
-        log.error(f"Error linking user ID: {e}")
-        await ctx.send("An error occurred while linking your ID.")
+    discord_user_id = ctx.author.id
+    USER_LINKS[discord_user_id] = sdvx_id
+    save_linked_players(USER_LINKS) # Save changes to persistent storage
+    await ctx.send(f"Successfully linked {ctx.author.display_name} to SDVX ID: {sdvx_id}")
+    log.info(f"Linked Discord user {discord_user_id} to SDVX ID {sdvx_id}")
 
-@bot.command(name="showlinks")
-async def show_links(ctx):
+@bot.command(name='checkin')
+async def checkin(ctx):
     """
-    Shows all currently linked Discord users and their SDVX IDs.
+    Manually checks a user into the arcade tracking system.
+    Usage: !checkin
     """
-    if not USER_LINKS:
-        await ctx.send("No users are currently linked.")
+    discord_user_id = ctx.author.id
+    if discord_user_id not in USER_LINKS:
+        await ctx.send("You need to link your SDVX ID first using !linkid <your_sdvx_id>.")
         return
 
-    response = "Currently Linked Users:\n"
-    for discord_id, sdvx_id in USER_LINKS.items():
-        try:
-            user = await bot.fetch_user(discord_id)
-            response += f"- {user.display_name} (Discord ID: {discord_id}) -> SDVX ID: {sdvx_id}\n"
-        except discord.NotFound:
-            response += f"- Unknown User (ID: {discord_id}) -> SDVX ID: {sdvx_id} (User not found on Discord)\n"
-    await ctx.send(response)
-    log.info("Displayed linked users.")
+    sdvx_id = USER_LINKS[discord_user_id]
+    
+    # Placeholder for actual check-in logic
+    # In a real scenario, this would trigger scraping to get initial stats
+    # and set up a session.
+    CHECKIN_STORE[discord_user_id] = {
+        "time": datetime.datetime.now(),
+        "plays": 0, # Placeholder
+        "vf": 0.0   # Placeholder
+    }
+    await ctx.send(f"Checked in {ctx.author.display_name} (SDVX ID: {sdvx_id}).")
+    log.info(f"User {discord_user_id} checked in.")
 
-@bot.command(name="unlinkid")
-async def unlink_user_id(ctx):
+@bot.command(name='checkout')
+async def checkout(ctx):
     """
-    Unlinks a Discord user from their SDVX ID.
+    Manually checks a user out of the arcade tracking system.
+    Usage: !checkout
     """
-    user_id = ctx.author.id
-    if user_id in USER_LINKS:
-        del USER_LINKS[user_id]
-        save_linked_players(USER_LINKS) # Save updated USER_LINKS to file
-        await ctx.send(f"Successfully unlinked Discord user {ctx.author.display_name}.")
-        log.info(f"Unlinked {ctx.author.display_name} (Discord ID: {user_id}).")
+    discord_user_id = ctx.author.id
+    if discord_user_id in CHECKIN_STORE:
+        session_info = CHECKIN_STORE.pop(discord_user_id)
+        duration = datetime.datetime.now() - session_info["time"]
+        await ctx.send(f"Checked out {ctx.author.display_name}. Session lasted {duration}.")
+        log.info(f"User {discord_user_id} checked out.")
     else:
-        await ctx.send("You are not currently linked.")
+        await ctx.send("You are not currently checked in.")
 
-@bot.command(name="testscrape")
-async def test_scrape_command(ctx, sdvx_id: str):
+@bot.command(name='stats')
+async def show_stats(ctx):
     """
-    (Temporary/Development) Tests scraping a profile page directly.
+    Displays current stats for the linked SDVX ID.
+    Usage: !stats
     """
-    await ctx.send(f"Attempting to scrape profile for SDVX ID: {sdvx_id}...")
+    discord_user_id = ctx.author.id
+    if discord_user_id not in USER_LINKS:
+        await ctx.send("You need to link your SDVX ID first using !linkid <your_sdvx_id>.")
+        return
+
+    sdvx_id = USER_LINKS[discord_user_id]
+    await ctx.send(f"Fetching stats for SDVX ID: {sdvx_id}...")
+    
     try:
-        profile_data = await scrape_profile_page(sdvx_id)
-        if profile_data:
-            await ctx.send(f"Successfully scraped: {profile_data.get('player_name')} (VF: {profile_data.get('vf')})")
-        else:
-            await ctx.send("Failed to scrape profile. Check logs for errors.")
+        # This is a placeholder for actual scraping of stats
+        # In a real scenario, this would use the BROWSER to get current stats
+        profile_data = scrape_profile_page(BROWSER, sdvx_id)
+        vf = get_vf_from_arcade(BROWSER, sdvx_id) # Example usage
+        await ctx.send(f"Current VF for {sdvx_id}: {vf} (Profile: {profile_data})")
+        log.info(f"Fetched stats for {sdvx_id}")
     except Exception as e:
-        log.error(f"Error during test scrape: {e}")
-        await ctx.send(f"An error occurred during scrape: {e}")
+        await ctx.send(f"Could not fetch stats for {sdvx_id}. Error: {e}")
+        log.error(f"Failed to fetch stats for {sdvx_id}: {e}")
+
+@bot.command(name='leaderboard')
+async def show_leaderboard(ctx):
+    """
+    Displays the current top 10 arcade leaderboard.
+    Usage: !leaderboard
+    """
+    await ctx.send("Fetching leaderboard...")
+    try:
+        leaderboard_data = scrape_leaderboard(BROWSER)
+        formatted_leaderboard = "\n".join([f"{i+1}. {p['name']} ({p['vf']})" for i, p in enumerate(leaderboard_data)])
+        await ctx.send(f"**Arcade Leaderboard Top 10:**\n{formatted_leaderboard}")
+        log.info("Fetched leaderboard.")
+    except Exception as e:
+        await ctx.send(f"Could not fetch leaderboard. Error: {e}")
+        log.error(f"Failed to fetch leaderboard: {e}")
