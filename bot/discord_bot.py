@@ -43,16 +43,16 @@ async def on_ready():
     if USER_LINKS and OAUTH_LOGIN_ENABLED:
         log.info("DISCORD_BOT: Linked users found and OAuth login enabled. Starting OAuth login flow.")
         
-        # Get the first linked SDVX ID for OAuth login
+        # Get the first SDVX ID from linked users to pass to OAuth login
         first_sdvx = next(iter(USER_LINKS.values()))
         loop = asyncio.get_event_loop()
 
         try:
-            # Run the synchronous OAuth login in a separate thread
+            # Correctly call run_oauth_login using run_in_executor as it's a synchronous method
             login_success = await loop.run_in_executor(None, BROWSER.run_oauth_login, first_sdvx)
             if login_success:
                 log.info("DISCORD_BOT: OAuth login automation completed successfully.")
-                # Initialize headless Chrome after successful login
+                # Initialize headless Chrome only after successful OAuth login
                 headless_success = await loop.run_in_executor(None, BROWSER.init_headless_chrome)
                 if not headless_success:
                     log.error("DISCORD_BOT: Headless ChromeDriver initialization failed. Scraping commands will not work.")
@@ -60,6 +60,7 @@ async def on_ready():
                     log.info("DISCORD_BOT: Headless ChromeDriver is ready (authenticated).")
             else:
                 log.error("DISCORD_BOT: OAuth login automation failed. The bot will not be able to scrape without a valid eagle.ac cookie.")
+
         except Exception as e:
             log.error(f"DISCORD_BOT: OAuth login automation failed: {e}")
             log.warning("DISCORD_BOT: The bot will not be able to scrape without a valid eagle.ac cookie.")
@@ -84,6 +85,20 @@ async def link_id(ctx, sdvx_id: str):
     save_linked_players(USER_LINKS) # Save changes to persistent storage
     await ctx.send(f"Successfully linked {ctx.author.display_name} to SDVX ID: {sdvx_id}")
     log.info(f"Linked Discord user {discord_user_id} to SDVX ID {sdvx_id}")
+
+    # Re-initialize browser after linking a new ID, if necessary
+    loop = asyncio.get_event_loop()
+    login_success = await loop.run_in_executor(None, BROWSER.run_oauth_login, sdvx_id)
+    if not login_success:
+        await ctx.send("❌ OAuth login flow failed after linking. Please check your Eagle credentials or rerun /linkid.")
+        return
+
+    headless_success = await loop.run_in_executor(None, BROWSER.init_headless_chrome)
+    if not headless_success:
+        await ctx.send("❌ Headless ChromeDriver initialization failed. Scraping commands will not work.")
+    else:
+        await ctx.send("✅ Headless ChromeDriver is ready. You may now use /checkin, /stats, /leaderboard.")
+
 
 @bot.command(name='checkin')
 async def checkin(ctx):
@@ -160,6 +175,7 @@ async def show_leaderboard(ctx):
         leaderboard_data = scrape_leaderboard(BROWSER)
         formatted_leaderboard = "\n".join([f"{i+1}. {p['name']} ({p['vf']})" for i, p in enumerate(leaderboard_data)])
         await ctx.send(f"**Arcade Leaderboard Top 10:**\n{formatted_leaderboard}")
+        log.info("Fetched leaderboard.")
     except Exception as e:
         await ctx.send(f"Could not fetch leaderboard. Error: {e}")
         log.error(f"Failed to fetch leaderboard: {e}")
