@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from bot.config import DISCORD_BOT_TOKEN, log
 from bot.discord_bot import bot
-from bot.checkin_store import USER_LINKS, load_linked_players
+from bot.checkin_store import USER_LINKS # Remove load_linked_players import
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Main Bot Execution
@@ -19,15 +19,16 @@ from bot.checkin_store import USER_LINKS, load_linked_players
 async def main():
     """
     The main asynchronous function to start and run the Discord bot.
-    It loads persistent user data before starting the bot's connection to Discord.
+    It handles bot initialization and lifecycle.
     """
     log.info("MAIN: Starting bot execution flow.")
 
-    # Load linked players from persistent storage on startup
-    log.info("MAIN: Calling load_linked_players from checkin_store.")
-    loaded_users = load_linked_players()
-    USER_LINKS.update(loaded_users)
-    log.info(f"MAIN: USER_LINKS dictionary updated with {len(USER_LINKS)} entries.")
+    # Removed: Load linked players from persistent storage on startup
+    # The loading is now handled within discord_bot.py's on_ready event.
+    # log.info("MAIN: Calling load_linked_players from checkin_store.")
+    # loaded_users = load_linked_players()
+    # USER_LINKS.update(loaded_users)
+    # log.info(f"MAIN: USER_LINKS dictionary updated with {len(USER_LINKS)} entries.")
 
     log.info("MAIN: Attempting to start Discord bot connection.")
     try:
@@ -51,4 +52,3 @@ if __name__ == "__main__":
         sys.exit(1)
 
     asyncio.run(main())
-    log.info("MAIN: Async event loop finished.")
