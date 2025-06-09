@@ -3,7 +3,7 @@ from discord.ext import commands
 import asyncio
 import os
 import sys
-import datetime # Added this import to resolve NameError for datetime
+import datetime 
 
 # Add the parent directory to the Python path to allow imports from 'bot' package
 # This is crucial for running the bot correctly from the project root.
@@ -43,9 +43,14 @@ async def on_ready():
     if USER_LINKS and OAUTH_LOGIN_ENABLED:
         log.info("DISCORD_BOT: Linked users found and OAuth login enabled. Starting OAuth login flow.")
         try:
-            # Corrected method call from oauth_login() to run_oauth_login()
-            await BROWSER.run_oauth_login()
-            log.info("DISCORD_BOT: OAuth login automation completed successfully.")
+            # Get the first linked SDVX ID to pass to run_oauth_login
+            # This uses a linked ID as per the status report's root cause analysis.
+            first_sdvx_id = next(iter(USER_LINKS.values()), None)
+            if first_sdvx_id:
+                await BROWSER.run_oauth_login(first_sdvx_id)
+                log.info("DISCORD_BOT: OAuth login automation completed successfully.")
+            else:
+                log.warning("DISCORD_BOT: USER_LINKS is not empty but no SDVX ID found to use for OAuth. Skipping OAuth login.")
         except Exception as e:
             log.error(f"DISCORD_BOT: OAuth login automation failed: {e}")
             log.warning("DISCORD_BOT: The bot will not be able to scrape without a valid eagle.ac cookie.")
