@@ -33,6 +33,7 @@ EAGLE_PASSWORD = os.getenv('EAGLE_PASSWORD')
 CHROME_DRIVER_PATH = os.getenv('CHROME_DRIVER_PATH')
 CHROME_USER_DATA_DIR = os.getenv('CHROME_USER_DATA_DIR')
 CHROME_PROFILE_DIR = os.getenv('CHROME_PROFILE_DIR')
+ARCADE_ID = os.getenv("ARCADE_ID", "94")
 
 # Example: Base URL for Eagle's SDVX profile pages
 # SDVX_PROFILE_BASE_URL = "https://eagle.ac/game/sdvx/profile/"
