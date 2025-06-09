@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from bot.config import DISCORD_BOT_TOKEN, log
 from bot.discord_bot import bot
-from bot.checkin_store import USER_LINKS, load_linked_players # Import load_linked_players
+from bot.checkin_store import USER_LINKS, load_linked_players
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Main Bot Execution
@@ -26,6 +26,7 @@ async def main():
     # Load linked players from persistent storage on startup
     loaded_users = load_linked_players()
     USER_LINKS.update(loaded_users)
+    log.info(f"Loaded USER_LINKS on startup: {USER_LINKS}") # Temporary logging for validation
 
     try:
         await bot.start(DISCORD_BOT_TOKEN)
