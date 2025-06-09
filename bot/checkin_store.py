@@ -45,16 +45,22 @@ def load_linked_players():
     The keys (Discord user IDs) are converted to integers upon loading, as
     JSON stores object keys as strings, but Discord IDs are numerical.
     """
+    from bot.config import log
+
+    log.info(f"CHK_LOAD: Attempting to load linked players from: {LINKED_PLAYERS_FILE}")
     if not os.path.exists(LINKED_PLAYERS_FILE):
+        log.info("CHK_LOAD: Linked players file not found. Returning empty dictionary.")
         return {}
 
     try:
+        log.info(f"CHK_LOAD: File found. Attempting to open and parse: {LINKED_PLAYERS_FILE}")
         with open(LINKED_PLAYERS_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
             converted_data = {int(k): v for k, v in data.items()}
+            log.info(f"CHK_LOAD: Successfully loaded {len(converted_data)} linked players.")
             return converted_data
     except (json.JSONDecodeError, IOError) as e:
-        print(f"Error loading linked players from {LINKED_PLAYERS_FILE}: {e}")
+        log.error(f"CHK_LOAD: Error loading linked players from {LINKED_PLAYERS_FILE}: {e}. Returning empty dictionary.")
         return {}
 
 def save_linked_players(linked_players_data):
@@ -62,13 +68,20 @@ def save_linked_players(linked_players_data):
     Saves the current linked player data to the persistent JSON file.
     This function ensures the data directory exists before writing the file.
     Any errors during file writing or JSON serialization are caught and logged.
+
+    The keys (Discord user IDs) are converted to strings before saving, as
+    JSON requires object keys to be strings.
     """
-    os.makedirs(DATA_DIR, exist_ok=True) # Ensure data directory exists
+    from bot.config import log
+
+    log.info(f"CHK_SAVE: Attempting to save linked players to: {LINKED_PLAYERS_FILE}")
+    os.makedirs(DATA_DIR, exist_ok=True)
 
     try:
+        log.info("CHK_SAVE: Directory ensured. Attempting to serialize and write data.")
         with open(LINKED_PLAYERS_FILE, 'w', encoding='utf-8') as f:
-            # JSON keys must be strings. Convert integer Discord IDs to strings for saving.
             serialized_data = {str(k): v for k, v in linked_players_data.items()}
             json.dump(serialized_data, f, indent=4)
+            log.info(f"CHK_SAVE: Successfully saved {len(linked_players_data)} linked players.")
     except IOError as e:
-        print(f"Error saving linked players to {LINKED_PLAYERS_FILE}: {e}")
+        log.error(f"CHK_SAVE: Error saving linked players to {LINKED_PLAYERS_FILE}: {e}")
