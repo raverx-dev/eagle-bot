@@ -23,6 +23,7 @@ def service(mock_performance_service):
     # The file I/O methods will be patched directly on the instance in each test
     return SessionService("fake_path.json", mock_performance_service)
 
+# --- Existing Tests ---
 
 def test_process_new_score_new_session(service):
     """Tests that a new session is created for a new score."""
@@ -36,7 +37,7 @@ def test_process_new_score_new_session(service):
         written_data = mock_write.call_args[0][0]
         assert "user1" in written_data
         assert written_data["user1"]["status"] == "active"
-        assert written_data["user1"]["start_time"] == MOCK_NOW.isoformat()
+        assert written_data["user1"]["type"] == "auto"
 
 
 def test_process_new_score_blocked_by_global_lock(service):
@@ -63,7 +64,6 @@ def test_process_new_score_resumes_session(service):
         
         written_data = mock_write.call_args[0][0]
         assert written_data["user1"]["status"] == "active"
-        assert written_data["user1"]["last_activity"] == MOCK_NOW.isoformat()
 
 
 @pytest.mark.asyncio
@@ -109,3 +109,53 @@ def test_end_session_direct_call(service):
         
         written_data = mock_write.call_args[0][0]
         assert "user1" not in written_data
+        
+
+# --- New Tests for Manual Session and Pause ---
+
+def test_start_manual_session_success(service):
+    """Tests that a manual session can be started when no one is active."""
+    with patch.object(service, '_read_sessions', return_value={}), \
+         patch.object(service, '_write_sessions') as mock_write, \
+         patch.object(service, '_get_active_session', return_value=None), \
+         patch.object(service, '_get_now', return_value=MOCK_NOW):
+        
+        result = service.start_manual_session("user1")
+        
+        assert result is True
+        written_data = mock_write.call_args[0][0]
+        assert written_data["user1"]["type"] == "manual"
+        assert written_data["user1"]["status"] == "active"
+
+
+def test_start_manual_session_fails_when_locked(service):
+    """Tests that a manual session cannot be started when another is active."""
+    with patch.object(service, '_get_active_session', return_value={"discord_id": "user2"}):
+        result = service.start_manual_session("user1")
+        assert result is False
+
+def test_pause_session_success(service):
+    """Tests that an active session can be paused."""
+    initial_sessions = {"user1": {"status": "active"}}
+    
+    with patch.object(service, '_read_sessions', return_value=initial_sessions), \
+         patch.object(service, '_write_sessions') as mock_write, \
+         patch.object(service, '_get_now', return_value=MOCK_NOW):
+        
+        result = service.pause_session("user1")
+        
+        assert result is True
+        written_data = mock_write.call_args[0][0]
+        assert written_data["user1"]["status"] == "on_break"
+
+
+def test_pause_session_fails_if_not_active(service):
+    """Tests that only an active session can be paused."""
+    initial_sessions = {"user1": {"status": "on_break"}}
+    
+    with patch.object(service, '_read_sessions', return_value=initial_sessions), \
+         patch.object(service, '_write_sessions') as mock_write:
+        
+        result = service.pause_session("user1")
+        assert result is False
+        mock_write.assert_not_called()

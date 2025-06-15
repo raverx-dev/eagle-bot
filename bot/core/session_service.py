@@ -2,7 +2,7 @@ import json
 import copy
 from datetime import datetime, timezone, timedelta
 
-# We expect PerformanceService to be defined, even if it's just a placeholder
+# We expect PerformanceService to be defined, even if it's a placeholder
 from bot.core.performance_service import PerformanceService
 
 class SessionService:
@@ -58,6 +58,37 @@ class SessionService:
         
         self._write_sessions(sessions)
 
+    def start_manual_session(self, discord_id: str) -> bool:
+        """Starts a manual session if no other session is active."""
+        if self._get_active_session():
+            return False # Global lock is active
+
+        sessions = self._read_sessions()
+        now_iso = self._get_now().isoformat()
+        
+        sessions[discord_id] = {
+            "discord_id": discord_id,
+            "status": "active",
+            "type": "manual",
+            "start_time": now_iso,
+            "last_activity": now_iso
+        }
+        self._write_sessions(sessions)
+        return True
+
+    def pause_session(self, discord_id: str) -> bool:
+        """Pauses a user's active session, setting it to 'on_break'."""
+        sessions = self._read_sessions()
+        session = sessions.get(discord_id)
+
+        if not session or session.get("status") != "active":
+            return False # Can only pause an active session
+        
+        session["status"] = "on_break"
+        session["last_activity"] = self._get_now().isoformat()
+        self._write_sessions(sessions)
+        return True
+
     def end_session(self, discord_id: str):
         sessions = self._read_sessions()
         if discord_id in sessions:
@@ -66,7 +97,6 @@ class SessionService:
 
     async def find_and_end_stale_sessions(self):
         sessions = self._read_sessions()
-        # Use a deep copy to correctly detect changes in nested dictionaries
         original_sessions = copy.deepcopy(sessions)
         now = self._get_now()
         
@@ -77,7 +107,6 @@ class SessionService:
             if not last_activity_str: continue
             
             try:
-                # Use fromisoformat which correctly handles timezone info
                 last_activity_dt = datetime.fromisoformat(last_activity_str)
             except ValueError: continue
 
