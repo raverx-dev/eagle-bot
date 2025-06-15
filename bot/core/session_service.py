@@ -132,3 +132,8 @@ class SessionService:
         
         if sessions != original_sessions:
             self._write_sessions(sessions)
+
+    def get_session_count(self) -> int:
+        """Returns the total number of active sessions."""
+        sessions = self._read_sessions()
+        return len(sessions)

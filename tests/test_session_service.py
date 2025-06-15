@@ -20,10 +20,8 @@ def mock_performance_service():
 @pytest.fixture
 def service(mock_performance_service):
     """Provides a SessionService instance for testing."""
-    # The file I/O methods will be patched directly on the instance in each test
     return SessionService("fake_path.json", mock_performance_service)
 
-# --- Existing Tests ---
 
 def test_process_new_score_new_session(service):
     """Tests that a new session is created for a new score."""
@@ -158,7 +156,6 @@ def test_pause_session_fails_if_not_active(service):
         assert result is False
         mock_write.assert_not_called()
 
-# --- New Tests for force_checkout ---
 
 def test_force_checkout_success(service):
     """Tests that an admin can forcibly end an existing session."""
@@ -181,3 +178,12 @@ def test_force_checkout_no_session(service):
         
         assert result is False
         mock_end_session.assert_not_called()
+
+# --- New Test for get_session_count ---
+
+def test_get_session_count(service):
+    """Tests that the session count is returned correctly."""
+    mock_sessions = {"user1": {}, "user2": {}, "user3": {}}
+    with patch.object(service, '_read_sessions', return_value=mock_sessions):
+        count = service.get_session_count()
+        assert count == 3
