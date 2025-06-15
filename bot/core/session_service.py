@@ -61,7 +61,7 @@ class SessionService:
     def start_manual_session(self, discord_id: str) -> bool:
         """Starts a manual session if no other session is active."""
         if self._get_active_session():
-            return False # Global lock is active
+            return False
 
         sessions = self._read_sessions()
         now_iso = self._get_now().isoformat()
@@ -82,7 +82,7 @@ class SessionService:
         session = sessions.get(discord_id)
 
         if not session or session.get("status") != "active":
-            return False # Can only pause an active session
+            return False
         
         session["status"] = "on_break"
         session["last_activity"] = self._get_now().isoformat()
@@ -94,6 +94,14 @@ class SessionService:
         if discord_id in sessions:
             del sessions[discord_id]
             self._write_sessions(sessions)
+
+    def force_checkout(self, discord_id: str) -> bool:
+        """Admin function to forcibly end a user's session."""
+        sessions = self._read_sessions()
+        if discord_id in sessions:
+            self.end_session(discord_id)
+            return True
+        return False
 
     async def find_and_end_stale_sessions(self):
         sessions = self._read_sessions()

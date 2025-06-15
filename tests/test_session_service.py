@@ -111,8 +111,6 @@ def test_end_session_direct_call(service):
         assert "user1" not in written_data
         
 
-# --- New Tests for Manual Session and Pause ---
-
 def test_start_manual_session_success(service):
     """Tests that a manual session can be started when no one is active."""
     with patch.object(service, '_read_sessions', return_value={}), \
@@ -159,3 +157,27 @@ def test_pause_session_fails_if_not_active(service):
         result = service.pause_session("user1")
         assert result is False
         mock_write.assert_not_called()
+
+# --- New Tests for force_checkout ---
+
+def test_force_checkout_success(service):
+    """Tests that an admin can forcibly end an existing session."""
+    initial_sessions = {"user1_to_checkout": {"status": "any_status"}}
+    
+    with patch.object(service, '_read_sessions', return_value=initial_sessions), \
+         patch.object(service, 'end_session') as mock_end_session:
+        
+        result = service.force_checkout("user1_to_checkout")
+        
+        assert result is True
+        mock_end_session.assert_called_once_with("user1_to_checkout")
+
+def test_force_checkout_no_session(service):
+    """Tests that force_checkout does nothing if the user has no session."""
+    with patch.object(service, '_read_sessions', return_value={}), \
+         patch.object(service, 'end_session') as mock_end_session:
+        
+        result = service.force_checkout("user_with_no_session")
+        
+        assert result is False
+        mock_end_session.assert_not_called()

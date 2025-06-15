@@ -1,5 +1,4 @@
 import pytest
-import json
 from unittest.mock import patch, MagicMock, AsyncMock
 
 # Assuming EagleBrowser is importable for type hinting, even if not implemented
@@ -62,7 +61,7 @@ async def test_update_player_cache_update_existing(users_file_path, mock_browser
         assert new_players == []
         written_data = mock_write.call_args[0][0]
         assert written_data["12345678"]["volforce"] == 2.0
-        assert written_data["12345678"]["discord_id"] == "discord123" # Must be preserved
+        assert written_data["12345678"]["discord_id"] == "discord123"
 
 @pytest.mark.asyncio
 async def test_update_player_cache_discover_new(users_file_path, mock_browser):
@@ -96,7 +95,6 @@ async def test_update_player_cache_scrape_fails(users_file_path, mock_browser):
             
         mock_write.assert_not_called()
 
-# --- New Test for the get_user_by_discord_id method ---
 def test_get_user_by_discord_id(users_file_path, mock_browser):
     """Tests finding a user by their Discord ID."""
     mock_data = {
@@ -107,11 +105,37 @@ def test_get_user_by_discord_id(users_file_path, mock_browser):
     with patch.object(IdentityService, '_read_users', return_value=mock_data):
         service = IdentityService(users_file_path, mock_browser)
         
-        # Test finding an existing user
         found_user = service.get_user_by_discord_id("discord2")
         assert found_user is not None
         assert found_user["player_name"] == "Player Two"
 
-        # Test finding a non-existent user
         not_found_user = service.get_user_by_discord_id("discord3")
         assert not_found_user is None
+
+# --- New Tests for force_unlink ---
+
+def test_force_unlink_success(users_file_path, mock_browser):
+    """Tests that an admin can forcibly unlink a user."""
+    initial_users = {
+        "11112222": {"discord_id": "discord1_to_unlink", "player_name": "Player One"}
+    }
+    with patch.object(IdentityService, '_read_users', return_value=initial_users), \
+         patch.object(IdentityService, '_write_users') as mock_write:
+        
+        service = IdentityService(users_file_path, mock_browser)
+        result = service.force_unlink("discord1_to_unlink")
+
+        assert result is True
+        written_data = mock_write.call_args[0][0]
+        assert written_data["11112222"]["discord_id"] is None
+
+def test_force_unlink_user_not_found(users_file_path, mock_browser):
+    """Tests that force_unlink returns False if the user isn't linked."""
+    with patch.object(IdentityService, '_read_users', return_value={}), \
+         patch.object(IdentityService, '_write_users') as mock_write:
+
+        service = IdentityService(users_file_path, mock_browser)
+        result = service.force_unlink("non_existent_discord_id")
+
+        assert result is False
+        mock_write.assert_not_called()

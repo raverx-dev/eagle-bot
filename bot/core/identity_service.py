@@ -21,6 +21,7 @@ class IdentityService:
             json.dump(data, f, ensure_ascii=False, indent=4)
 
     def get_user_by_discord_id(self, discord_id: str) -> dict | None:
+        """Finds a user profile by their Discord ID."""
         users = self._read_users()
         for sdvx_id, user_data in users.items():
             if user_data.get("discord_id") == discord_id:
@@ -42,6 +43,18 @@ class IdentityService:
         player_profile["discord_id"] = discord_id
         
         users[normalized_id] = player_profile
+        self._write_users(users)
+        return True
+
+    def force_unlink(self, discord_id_to_unlink: str) -> bool:
+        """Admin function to forcibly remove a discord link from a user profile."""
+        users = self._read_users()
+        user_profile = self.get_user_by_discord_id(discord_id_to_unlink)
+
+        if not user_profile:
+            return False # User wasn't linked in the first place
+
+        user_profile["discord_id"] = None
         self._write_users(users)
         return True
 
