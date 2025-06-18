@@ -14,7 +14,7 @@ The bot provides the following core functionalities:
 
 ## Commands
 
-All commands are prefixed with `/`.
+All commands are prefixed with `/`
 
 * `/linkid <SDVX_ID>`  
   * **Admin only:** Associates your Discord user ID with a specific SDVX ID. This is required before other commands can be used.  

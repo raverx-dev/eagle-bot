@@ -40,3 +40,20 @@ validate_token.py
 .idea/
 *.swp
 .DS_Store
+# Environment variables
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Data files - should not be versioned
+data/
+
+# Virtual environment
+venv/
+
+# Archives and temporary files
+*.zip
+check_*.py
+run_scraper.py
