@@ -57,3 +57,4 @@ venv/
 *.zip
 check_*.py
 run_scraper.py
+stage_files.sh
