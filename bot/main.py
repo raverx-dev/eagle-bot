@@ -13,6 +13,7 @@ from bot.core.system_service import SystemService
 from bot.core.role_service import RoleService
 from bot.utils.chronos import Chronos
 from bot.utils.error_handler import ScrapeErrorHandler
+from bot.utils.notification_service import NotificationService # Import the new service
 
 async def main():
     if not DISCORD_BOT_TOKEN:
@@ -31,21 +32,26 @@ async def main():
         log.error("❌ Bot cannot start without a headless browser. Exiting.")
         return
 
-    # --- Corrected Service Initialization Order & Dependency Injection ---
     identity_service = IdentityService("data/users.json", browser)
-    
     performance_service = PerformanceService("data/users.json")
-    # CRITICAL FIX: Link the identity_service instance to performance_service
     performance_service.identity_service = identity_service
-
     role_service = RoleService(bot, GUILD_ID, NOW_PLAYING_ROLE_NAME)
     
-    session_service = SessionService("data/sessions.json", performance_service, browser, role_service=role_service)
-    
+    # Create the real NotificationService instance
+    notification_service = NotificationService(bot)
+
+    # Inject NotificationService into SessionService
+    session_service = SessionService(
+        sessions_file_path="data/sessions.json",
+        performance_service=performance_service,
+        browser=browser,
+        role_service=role_service,
+        notification_service=notification_service
+    )
     system_service = SystemService("data/arcade_schedule.json")
     
-    dummy_notifier = type("DummyNotifier", (), {"send_admin_alert": lambda msg: log.warning(f"DUMMY ALERT: {msg}")})()
-    error_handler = ScrapeErrorHandler(notification_service=dummy_notifier)
+    # The error handler can now also use the real notification service
+    error_handler = ScrapeErrorHandler(notification_service=notification_service)
 
     log.info("Attaching services to bot instance...")
     bot.identity_service = identity_service
@@ -53,14 +59,14 @@ async def main():
     bot.session_service = session_service
     bot.error_handler = error_handler
     bot.role_service = role_service
+    bot.notification_service = notification_service # Attach new service
 
-    chronos = Chronos(system_service, identity_service, session_service)
+    chronos = Chronos(system_service, identity_service, session_service, error_handler=error_handler)
 
     @bot.event
     async def on_ready():
         log.info(f'✅ Logged in as {bot.user}')
         
-        # Robust RoleService initialization
         try:
             await bot.wait_until_ready()
             guild = await bot.fetch_guild(GUILD_ID)
@@ -72,10 +78,10 @@ async def main():
                     log.info("✅ RoleService fully initialized with guild and role.")
                 else:
                     log.error(f"❌ Role '{NOW_PLAYING_ROLE_NAME}' not found. Role management disabled.")
-                    bot.role_service = None # Disable service if role not found
+                    bot.role_service = None
             else:
                 log.error(f"❌ Guild with ID {GUILD_ID} not found. Role management disabled.")
-                bot.role_service = None # Disable service if guild not found
+                bot.role_service = None
         except Exception as e:
             log.error(f"❌ An unexpected error occurred during RoleService initialization: {e}", exc_info=True)
             bot.role_service = None

@@ -38,6 +38,7 @@ class IdentityService:
 
     async def get_user_by_discord_id(self, discord_id: str) -> dict | None:
         users = await self._read_users()
+        # This linear scan is acceptable for a small number of users.
         for sdvx_id, user_data in users.items():
             if user_data.get("discord_id") == discord_id:
                 return user_data
@@ -49,12 +50,14 @@ class IdentityService:
         normalized_id = sdvx_id.replace("-", "")
         users = await self._read_users()
 
+        # Unlink any existing account associated with this Discord ID
         for player_data in users.values():
             if player_data.get("discord_id") == discord_id:
                 player_data["discord_id"] = None
 
         player_profile = users.get(normalized_id, {"sdvx_id": normalized_id})
         
+        # Immediately scrape to get the player's name
         profile_data = await self.browser.scrape_player_profile(normalized_id)
         if profile_data and profile_data.get("player_name"):
             player_profile["player_name"] = profile_data["player_name"]
@@ -102,19 +105,29 @@ class IdentityService:
             user_profile["last_updated"] = now_iso
             log.debug(f"IDENTITY_SERVICE: Updated existing player {user_profile.get('player_name')} from leaderboard.")
 
-        # Pass 2: Enrich all known players with recent_plays from individual profile scrapes
+        # Pass 2: Enrich all known players with detailed data from individual profile scrapes
         current_sdvx_ids = list(users.keys())
         for sdvx_id in current_sdvx_ids:
             user_profile = users[sdvx_id]
             profile_data_from_scrape = await self.browser.scrape_player_profile(sdvx_id)
             
             if profile_data_from_scrape:
+                # Update player name from profile if available, as it's more authoritative
                 if profile_data_from_scrape.get("player_name") is not None:
                     user_profile["player_name"] = profile_data_from_scrape["player_name"]
                 
+                # --- NEW LOGIC: Store newly scraped fields ---
+                # Check for `is not None` to avoid overwriting good data with nothing
+                if profile_data_from_scrape.get("volforce") is not None:
+                    user_profile["volforce"] = profile_data_from_scrape["volforce"]
+                if profile_data_from_scrape.get("skill_level") is not None:
+                    user_profile["skill_level"] = profile_data_from_scrape["skill_level"]
+                if profile_data_from_scrape.get("total_plays") is not None:
+                    user_profile["total_plays"] = profile_data_from_scrape["total_plays"]
+                
                 user_profile["recent_plays"] = profile_data_from_scrape.get("recent_plays", [])
                 user_profile["last_updated"] = now_iso
-                log.debug(f"IDENTITY_SERVICE: Enriched profile for {sdvx_id} with recent plays.")
+                log.debug(f"IDENTITY_SERVICE: Enriched profile for {sdvx_id} with details.")
             else:
                 log.warning(f"IDENTITY_SERVICE: Failed to scrape individual profile for {sdvx_id}. Recent plays may be missing.")
                 user_profile["recent_plays"] = user_profile.get("recent_plays", [])

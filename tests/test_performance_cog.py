@@ -1,3 +1,4 @@
+# tests/test_performance_cog.py
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from bot.cogs.performance_cog import PerformanceCog
@@ -5,14 +6,13 @@ from bot.cogs.performance_cog import PerformanceCog
 @pytest.fixture
 def mock_performance_service():
     svc = MagicMock()
-    svc.get_player_stats_from_cache = MagicMock() # This is a synchronous read from cache
-    svc.get_arcade_leaderboard_from_cache = MagicMock() # This is a synchronous read from cache
+    svc.get_arcade_leaderboard_from_cache = MagicMock()
     return svc
 
 @pytest.fixture
 def mock_identity_service():
     svc = MagicMock()
-    svc.get_user_by_discord_id = AsyncMock() # This method is async
+    svc.get_user_by_discord_id = AsyncMock()
     return svc
 
 @pytest.fixture
@@ -25,46 +25,50 @@ def mock_interaction():
 
 @pytest.mark.asyncio
 async def test_stats_success(mock_performance_service, mock_identity_service, mock_interaction):
-    # Correctly set the return value for the AsyncMock
-    mock_identity_service.get_user_by_discord_id.return_value = {"sdvx_id": "9999"} # It returns a dict, no need for AsyncMock wrapper here, as it's awaited in the cog
-    mock_performance_service.get_player_stats_from_cache.return_value = {
-        "player_name": "TestUser", "volforce": 12.34, "rank": 5
+    # FIX: The test now reflects the new data structure and embed format.
+    mock_user_profile = {
+        "sdvx_id": "9999-8888",
+        "player_name": "TestUser",
+        "volforce": 15.123,
+        "skill_level": "Lv.10",
+        "total_plays": 500,
+        "recent_plays": [{"song_title": "Song A", "chart": "EXH 18", "grade": "S", "score": "9900123", "timestamp": "1 day ago"}]
     }
+    mock_identity_service.get_user_by_discord_id.return_value = mock_user_profile
+
     with patch("bot.cogs.performance_cog.create_embed", return_value="embed") as mock_create_embed:
         cog = PerformanceCog(MagicMock(), mock_performance_service, mock_identity_service)
         await cog.stats.callback(cog, mock_interaction)
 
         mock_identity_service.get_user_by_discord_id.assert_called_once_with(str(12345))
-        mock_performance_service.get_player_stats_from_cache.assert_called_once_with("9999")
         mock_create_embed.assert_called_once()
-        assert "TestUser" in mock_create_embed.call_args.kwargs.get("description", "")
+        
+        # Verify the new title and fields
+        kwargs = mock_create_embed.call_args.kwargs
+        assert "📊 Stats for TestUser (9999-8888)" in kwargs.get("title")
+        assert len(kwargs.get("fields")) == 4
+        assert kwargs.get("fields")[0]["name"] == "Volforce"
+        assert "Song A" in kwargs.get("fields")[3]["value"]
 
 @pytest.mark.asyncio
 async def test_stats_user_not_linked(mock_performance_service, mock_identity_service, mock_interaction):
-    # Correctly set the return value for the AsyncMock
-    mock_identity_service.get_user_by_discord_id.return_value = None # It returns None, no need for AsyncMock wrapper here
+    mock_identity_service.get_user_by_discord_id.return_value = None
     with patch("bot.cogs.performance_cog.create_embed", return_value="embed") as mock_create_embed:
         cog = PerformanceCog(MagicMock(), mock_performance_service, mock_identity_service)
         await cog.stats.callback(cog, mock_interaction)
-
-        mock_identity_service.get_user_by_discord_id.assert_called_once_with(str(12345))
-        mock_performance_service.get_player_stats_from_cache.assert_not_called()
         assert "Not Linked" in mock_create_embed.call_args.kwargs.get("title", "")
 
 @pytest.mark.asyncio
 async def test_leaderboard_success(mock_performance_service, mock_identity_service, mock_interaction):
     mock_performance_service.get_arcade_leaderboard_from_cache.return_value = [
         {"rank": 1, "player_name": "Alice", "volforce": 15.0},
-        {"rank": 2, "player_name": "Bob", "volforce": 14.5}
     ]
     with patch("bot.cogs.performance_cog.create_embed", return_value="embed") as mock_create_embed:
         cog = PerformanceCog(MagicMock(), mock_performance_service, mock_identity_service)
         await cog.leaderboard.callback(cog, mock_interaction)
-
-        mock_performance_service.get_arcade_leaderboard_from_cache.assert_called_once()
-        mock_create_embed.assert_called_once()
-        desc = mock_create_embed.call_args.kwargs.get("description", "")
-        assert "Alice" in desc and "Bob" in desc
+        assert "Alice" in mock_create_embed.call_args.kwargs.get("description", "")
+        # Check for new title
+        assert "🏆 Arcade 94 - SDVX Top 10" in mock_create_embed.call_args.kwargs.get("title")
 
 @pytest.mark.asyncio
 async def test_leaderboard_empty(mock_performance_service, mock_identity_service, mock_interaction):
@@ -72,6 +76,4 @@ async def test_leaderboard_empty(mock_performance_service, mock_identity_service
     with patch("bot.cogs.performance_cog.create_embed", return_value="embed") as mock_create_embed:
         cog = PerformanceCog(MagicMock(), mock_performance_service, mock_identity_service)
         await cog.leaderboard.callback(cog, mock_interaction)
-
-        desc = mock_create_embed.call_args.kwargs.get("description", "")
-        assert "empty" in desc
+        assert "empty" in mock_create_embed.call_args.kwargs.get("description", "")

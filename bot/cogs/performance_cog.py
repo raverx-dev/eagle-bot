@@ -17,34 +17,69 @@ class PerformanceCog(commands.Cog):
     async def stats(self, interaction: discord.Interaction, user: Optional[discord.User] = None):
         target_user = user or interaction.user
         user_profile = await self.identity_service.get_user_by_discord_id(str(target_user.id))
+        
         if not user_profile or not user_profile.get("sdvx_id"):
-            embed = create_embed(title="Not Linked", description=f"{target_user.display_name} has not linked their SDVX ID.", theme="error")
+            embed = create_embed(
+                title="Not Linked",
+                description=f"{target_user.display_name} has not linked their SDVX ID.",
+                theme="error"
+            )
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
-        sdvx_id = user_profile["sdvx_id"]
-        stats = self.performance_service.get_player_stats_from_cache(sdvx_id)
-        if not stats:
-            embed = create_embed(title="No Stats Found", description="No stats found for this player in the cache.", theme="error")
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-        desc = (f"**Player:** {stats.get('player_name', 'N/A')}\n"
-                f"**Volforce:** {stats.get('volforce', 'N/A')}\n"
-                f"**Rank:** {stats.get('rank', 'N/A')}")
-        embed = create_embed(title=f"Stats for {stats.get('player_name', target_user.display_name)}", description=desc, theme="default")
+
+        # --- Rebuild the embed to match the new style ---
+        player_name = user_profile.get('player_name', 'N/A')
+        sdvx_id = user_profile.get('sdvx_id', 'N/A')
+        title = f"📊 Stats for {player_name} ({sdvx_id})"
+
+        fields = [
+            {"name": "Volforce", "value": f"{user_profile.get('volforce', 0):.3f}", "inline": True},
+            {"name": "Skill Level", "value": str(user_profile.get('skill_level', 'N/A')), "inline": True},
+            {"name": "Total Plays", "value": str(user_profile.get('total_plays', 'N/A')), "inline": True}
+        ]
+
+        recent_plays = user_profile.get("recent_plays", [])
+        if recent_plays:
+            score_log = []
+            for play in recent_plays[:5]:  # Take the top 5
+                p_title = play.get('song_title', 'Unknown Song')
+                p_chart = play.get('chart', '')
+                p_grade = play.get('grade', '?')
+                p_score = play.get('score', 'N/A')
+                p_time = play.get('timestamp', '')
+                score_log.append(f"• {p_title} {p_chart} {p_grade} {p_score} ({p_time})")
+            log_value = "\n".join(score_log)
+            fields.append({"name": "Last 5 Plays (Score Log)", "value": log_value, "inline": False})
+        else:
+            fields.append({"name": "Last 5 Plays (Score Log)", "value": "No recent plays found in cache.", "inline": False})
+
+        embed = create_embed(title=title, theme="default", fields=fields)
         await interaction.response.send_message(embed=embed)
 
     @discord.app_commands.command(name="leaderboard", description="Shows the top 10 players on the arcade leaderboard.")
     async def leaderboard(self, interaction: discord.Interaction):
         leaderboard = self.performance_service.get_arcade_leaderboard_from_cache()
         if not leaderboard:
-            embed = create_embed(title="Leaderboard", description="The leaderboard is currently empty.", theme="default")
+            embed = create_embed(
+                title="🏆 Arcade 94 - SDVX Top 10",
+                description="The leaderboard is currently empty.",
+                theme="leaderboard"
+            )
         else:
-            desc_lines = [f"**#{p['rank']}** - {p.get('player_name', 'N/A')} - **{p.get('volforce', 'N/A')} VF**" for p in leaderboard]
-            embed = create_embed(title="Arcade Leaderboard", description="\n".join(desc_lines), theme="default")
+            desc_lines = [
+                f"**#{p['rank']}** - {p.get('player_name', 'N/A')} - **{p.get('volforce', 0):.3f} VF**"
+                for p in leaderboard
+            ]
+            embed = create_embed(
+                title="🏆 Arcade 94 - SDVX Top 10",
+                description="\n".join(desc_lines),
+                theme="leaderboard"
+            )
         await interaction.response.send_message(embed=embed)
 
 async def setup(bot: commands.Bot):
     performance_service = getattr(bot, "performance_service", None)
     identity_service = getattr(bot, "identity_service", None)
-    if not performance_service or not identity_service: raise RuntimeError("Required services not attached.")
+    if not performance_service or not identity_service:
+        raise RuntimeError("Required services not attached.")
     await bot.add_cog(PerformanceCog(bot, performance_service, identity_service))

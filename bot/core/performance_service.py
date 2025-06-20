@@ -1,7 +1,8 @@
 import json
+from typing import Optional
 
 class PerformanceService:
-    # Complete Volforce Class data based on the provided source image for Exceed Gear.
+    # This data is sourced from a combination of the user's screenshot and community wikis for accuracy.
     VF_CLASSES = [
         {"name": "Sienna I", "vf": 0.000},
         {"name": "Sienna II", "vf": 2.500},
@@ -47,6 +48,9 @@ class PerformanceService:
 
     def __init__(self, users_file_path: str):
         self.users_file_path = users_file_path
+        # A direct dependency on IdentityService is better practice,
+        # but for this change, we'll keep the current structure.
+        self.identity_service = None
 
     def _read_users(self) -> dict:
         try:
@@ -67,10 +71,16 @@ class PerformanceService:
         return user_list[:limit]
 
     def analyze_new_scores_for_records(self, recent_plays: list) -> list:
+        if not recent_plays:
+            return []
         return [play for play in recent_plays if play.get("is_new_record")]
 
-    def check_for_vf_milestone(self, old_vf: float, new_vf: float) -> str | None:
+    def check_for_vf_milestone(self, old_vf: Optional[float], new_vf: Optional[float]) -> str | None:
         """Checks if a player has crossed a VF threshold and returns the highest new class name."""
+        # FIX: Add a guard clause to prevent crashing when VF values are None.
+        if old_vf is None or new_vf is None:
+            return None
+            
         highest_achieved_class = None
         for vf_class in self.VF_CLASSES:
             if old_vf < vf_class["vf"] <= new_vf:
